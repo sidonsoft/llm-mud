@@ -11,6 +11,7 @@ class LLMAgent:
         ws_url: str = "ws://localhost:8765",
         provider: Optional[LLMProvider] = None,
         system_prompt: Optional[str] = None,
+        inventory_context_tokens: int = 500,
     ):
         self.ws_url = ws_url
         self.provider = provider or create_provider("random")
@@ -23,6 +24,9 @@ class LLMAgent:
         self.current_room = ""
         self.exits = []
         self.inventory = []
+        self.inventory_state: Dict[str, Any] = {}
+        self.inventory_context_tokens = inventory_context_tokens
+        self._loot_callback_registered = False
 
     async def connect(self):
         self.websocket = await websockets.connect(self.ws_url)
@@ -46,8 +50,15 @@ class LLMAgent:
         if self.connected and self.websocket:
             message = await self.websocket.recv()
             data = json.loads(message)
-            if data.get("type") == "output":
+            msg_type = data.get("type")
+
+            if msg_type == "output":
                 return data.get("data", {})
+            elif msg_type == "inventory_update":
+                self.inventory_state = data.get("data", {})
+                print(f"Inventory updated: {data.get('summary', '')}")
+                return {"type": "inventory_update", **data}
+
         return {}
 
     async def get_state(self) -> Dict[str, Any]:
@@ -56,8 +67,64 @@ class LLMAgent:
             response = await self.websocket.recv()
             data = json.loads(response)
             if data.get("type") == "state":
+                self.inventory_state = data.get("inventory", {})
                 return data
         return {}
+
+    def query_inventory(self, query: str) -> str:
+        """Query inventory with natural language."""
+        parsed = self._parse_inventory_query(query)
+        if not parsed:
+            return "I didn't understand that query."
+
+        query_type = parsed.get("type")
+
+        if query_type == "best_in_slot":
+            slot = parsed.get("slot", "wielded")
+            items = self.inventory_state.get("items", {})
+            best = None
+            for item_data in items.values():
+                if item_data.get("slot") == slot:
+                    best = item_data.get("name")
+                    break
+            if best:
+                return f"Your best {slot} item is: {best}"
+            else:
+                return f"You don't have any {slot} items equipped."
+
+        elif query_type == "has_item":
+            item = parsed.get("item", "")
+            items = self.inventory_state.get("items", {})
+            found = any(item.lower() in k.lower() for k in items.keys())
+            if found:
+                return f"Yes, you have {item}."
+            else:
+                return f"No, you don't have {item}."
+
+        elif query_type == "count_item":
+            item = parsed.get("item", "")
+            items = self.inventory_state.get("items", {})
+            count = 0
+            for k, v in items.items():
+                if item.lower() in k.lower():
+                    count += v.get("quantity", 0)
+            return f"You have {count} {item}."
+
+        elif query_type == "list_category":
+            category = parsed.get("category", "items")
+            items = self.inventory_state.get("items", {})
+            # Simple category matching by name
+            matched = [
+                v.get("name")
+                for v in items.values()
+                if category.lower() in v.get("name", "").lower()
+            ]
+            if matched:
+                return f"You have: {', '.join(matched[:10])}"
+            else:
+                return f"You don't have any {category}."
+
+        return "Query not understood."
 
     def parse_room(self, output: str) -> None:
         lines = output.split("\n")
@@ -80,11 +147,89 @@ class LLMAgent:
                 if "down" in line_lower:
                     self.exits.append("down")
 
+    def _format_inventory_summary(self) -> str:
+        """Format inventory state for LLM context."""
+        if not self.inventory_state:
+            return "Inventory: empty"
+
+        items = self.inventory_state.get("items", {})
+        equipped = self.inventory_state.get("equipped_slots", {})
+        ground = self.inventory_state.get("ground_items", [])
+
+        if not items:
+            return "Inventory: empty"
+
+        # Build concise summary
+        item_list = []
+        for item_data in list(items.values())[:10]:
+            name = item_data.get("name", "unknown")
+            qty = item_data.get("quantity", 1)
+            loc = item_data.get("location", "inventory")
+
+            if loc == "equipped":
+                slot = item_data.get("slot", "unknown")
+                item_list.append(f"{name} x{qty} (equipped: {slot})")
+            else:
+                item_list.append(f"{name} x{qty}")
+
+        summary = f"Inventory: {len(items)} items"
+        if item_list:
+            summary += " (" + ", ".join(item_list)
+            if len(items) > 10:
+                summary += f", ... +{len(items) - 10} more"
+            summary += ")"
+
+        if equipped:
+            summary += (
+                f". Equipped: {', '.join(f'{k}: {v}' for k, v in equipped.items())}"
+            )
+
+        if ground:
+            summary += f". Ground: {', '.join(ground[:5])}"
+            if len(ground) > 5:
+                summary += f" (+{len(ground) - 5} more)"
+
+        return summary
+
+    def _parse_inventory_query(self, query: str) -> Optional[Dict[str, str]]:
+        """Parse natural language inventory query."""
+        import re
+
+        query_lower = query.lower()
+
+        # Pattern: "what's my best [slot]?" or "what is my best [slot]?"
+        best_match = re.search(r"what('?s| is) my best (\w+)", query_lower)
+        if best_match:
+            slot = best_match.group(2)
+            return {"type": "best_in_slot", "slot": slot}
+
+        # Pattern: "do I have any [item]?" or "do i have a [item]?"
+        have_match = re.search(r"do i have (?:any|a|an) (.+)", query_lower)
+        if have_match:
+            item = have_match.group(1)
+            return {"type": "has_item", "item": item}
+
+        # Pattern: "how many [item]?" or "how much [item]?"
+        count_match = re.search(r"how (?:many|much) (.+)", query_lower)
+        if count_match:
+            item = count_match.group(1)
+            return {"type": "count_item", "item": item}
+
+        # Pattern: "list my [type]" or "show me my [type]"
+        list_match = re.search(r"(?:list|show) (?:me )?my (.+)", query_lower)
+        if list_match:
+            category = list_match.group(1)
+            return {"type": "list_category", "category": category}
+
+        return None
+
     def build_prompt(self, output: str) -> str:
+        inventory_summary = self._format_inventory_summary()
+
         prompt = f"""Current state:
 Room: {self.current_room}
 Exits: {", ".join(self.exits) if self.exits else "unknown"}
-Inventory: {", ".join(self.inventory) if self.inventory else "empty"}
+{inventory_summary}
 
 Last output:
 {output}

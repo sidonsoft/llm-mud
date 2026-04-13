@@ -2,10 +2,10 @@
 
 ## Current Position
 
-**Phase:** 1/5 complete
-**Plan:** Phase 2: Auto-Loot System (ready)
-**Status:** Phase 1 ✅ Complete — Ready for Phase 2
-**Last activity:** 2026-04-14 — Phase 1 Core Inventory Tracking complete
+**Phase:** 2/5 complete
+**Plan:** Phase 3: LLM Integration (ready)
+**Status:** Phase 2 ✅ Complete — Ready for Phase 3
+**Last activity:** 2026-04-14 — Phase 2 Auto-Loot System complete
 
 ## Accumulated Context
 
@@ -15,6 +15,13 @@
 - WebSocket inventory events implemented
 - 16 unit tests passing
 - All 7 TRACK requirements delivered
+
+### Phase 2: Auto-Loot System ✅
+- Loot rule engine with tiered rules (never/conditional/always)
+- LLM consultation for conditional items
+- Decision caching for performance
+- 15 unit tests passing
+- All 6 LOOT requirements delivered
 
 ## Blockers/Concerns
 
@@ -33,6 +40,11 @@
   - 134 lines tests
   - All TRACK-01 through TRACK-07 delivered
   - 16/16 tests passing
+- **Phase 2: Auto-Loot System** — Complete
+  - 215 lines production code
+  - 106 lines tests
+  - All LOOT-01 through LOOT-06 delivered
+  - 15/15 tests passing
 
 ---
 
