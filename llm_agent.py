@@ -1,8 +1,10 @@
 import asyncio
 import json
 import websockets
+import time
 from typing import Dict, List, Any, Optional
 from llm_providers import LLMProvider, create_provider
+from context_manager import ContextManager, ActivityType, MemoryEntry
 
 
 class LLMAgent:
@@ -12,6 +14,8 @@ class LLMAgent:
         provider: Optional[LLMProvider] = None,
         system_prompt: Optional[str] = None,
         inventory_context_tokens: int = 500,
+        working_memory_size: int = 20,
+        config_path: str = "config.json",
     ):
         self.ws_url = ws_url
         self.provider = provider or create_provider("random")
@@ -27,6 +31,45 @@ class LLMAgent:
         self.inventory_state: Dict[str, Any] = {}
         self.inventory_context_tokens = inventory_context_tokens
         self._loot_callback_registered = False
+
+        # Context management
+        self.context_manager = ContextManager(working_memory_size=working_memory_size)
+        self.current_activity = ActivityType.IDLE
+        self.token_budget = 4000
+        self.current_token_estimate = 0
+        self.context_budgets = {
+            "combat": 6000,
+            "exploration": 5000,
+            "conversation": 4500,
+            "idle": 3000,
+        }
+
+        # Load config
+        config = self._load_config(config_path)
+
+        # Set up context budgets from config
+        budgets = config.get("context_budgets", {})
+        if budgets:
+            self.set_context_budgets(budgets)
+
+        # Set working memory size from config
+        if "working_memory_size" in config:
+            self.context_manager.working_memory_size = config["working_memory_size"]
+        if "compaction_rate_limit" in config:
+            self.context_manager.compaction_rate_limit = config["compaction_rate_limit"]
+        if "relevance_threshold" in config:
+            self.context_manager.relevance_threshold = config["relevance_threshold"]
+
+        # Set state callback for compaction
+        self.context_manager.set_state_callback(self._get_state_for_compaction)
+
+    def _load_config(self, config_path: str) -> Dict[str, Any]:
+        """Load configuration from JSON file."""
+        try:
+            with open(config_path, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
 
     async def connect(self):
         self.websocket = await websockets.connect(self.ws_url)
@@ -226,10 +269,15 @@ class LLMAgent:
     def build_prompt(self, output: str) -> str:
         inventory_summary = self._format_inventory_summary()
 
+        # Get relevance-filtered context
+        filtered_memory = self.context_manager.get_filtered_context(output)
+        memory_context = self._format_memory_context(filtered_memory)
+
         prompt = f"""Current state:
 Room: {self.current_room}
 Exits: {", ".join(self.exits) if self.exits else "unknown"}
 {inventory_summary}
+{memory_context}
 
 Last output:
 {output}
@@ -239,19 +287,126 @@ Available commands: north, south, east, west, up, down, look, inventory, get [it
 What do you want to do next? Respond with ONLY the command, nothing else."""
         return prompt
 
+    def _format_memory_context(self, filtered_memory: List[MemoryEntry]) -> str:
+        """Format filtered memory entries for the prompt."""
+        if not filtered_memory:
+            return ""
+
+        lines = ["Recent relevant events:"]
+        for entry in filtered_memory[-5:]:  # Last 5 relevant
+            lines.append(f"- {entry.content[:100]}")
+
+        return "\n".join(lines) + "\n"
+
     async def get_llm_response(self, prompt: str) -> str:
+        # Detect current activity
+        self.current_activity = self._detect_activity(prompt)
+
+        # Update combat state in context manager
+        self.context_manager.set_combat_state(
+            self.current_activity == ActivityType.COMBAT
+        )
+
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": prompt},
         ]
 
+        self.context_manager.add_message(prompt, activity_type=self.current_activity)
         self.memory.append({"role": "user", "content": prompt})
+
+        # Check soft limit (warn at 80%)
+        budget = self._get_current_budget()
+        if self.current_token_estimate > 0:
+            usage_ratio = self.current_token_estimate / budget if budget > 0 else 0
+            if usage_ratio >= 0.80 and usage_ratio < 1.0:
+                print(
+                    f"[Context Warning] {self.current_activity.value} token usage: {usage_ratio * 100:.0f}%"
+                )
 
         response = await self.provider.chat(messages)
 
+        self.context_manager.add_message(response, activity_type=self.current_activity)
         self.memory.append({"role": "assistant", "content": response})
 
+        # Update token estimate
+        self.current_token_estimate += self.context_manager.estimate_tokens(prompt)
+        self.current_token_estimate += self.context_manager.estimate_tokens(response)
+
+        # Check hard limit (compact at >80%)
+        compaction_result = await self.context_manager.check_and_compact(
+            self.current_token_estimate, budget, self.provider
+        )
+        if compaction_result:
+            print(f"[Context] {compaction_result}")
+            # Reset token estimate after compaction
+            self.current_token_estimate = self.context_manager.estimate_tokens(prompt)
+
         return response
+
+    def _detect_activity(self, text: str) -> ActivityType:
+        """Detect activity type from text content."""
+        text_lower = text.lower()
+
+        combat_keywords = ["kill", "fight", "attack", "combat", "hp", "damage"]
+        exploration_keywords = [
+            "north",
+            "south",
+            "east",
+            "west",
+            "explore",
+            "go",
+            "enter",
+        ]
+        conversation_keywords = ["say", "talk", "ask", "tell", "npc", "quest"]
+
+        if any(kw in text_lower for kw in combat_keywords):
+            return ActivityType.COMBAT
+        elif any(kw in text_lower for kw in exploration_keywords):
+            return ActivityType.EXPLORATION
+        elif any(kw in text_lower for kw in conversation_keywords):
+            return ActivityType.CONVERSATION
+
+        return ActivityType.IDLE
+
+    def _get_current_budget(self) -> int:
+        """Get current activity token budget."""
+        if hasattr(self, "context_budgets"):
+            return self.context_budgets.get(self.current_activity.value, 4000)
+        return 4000  # Default fallback
+
+    def _get_state_for_compaction(self) -> Dict[str, Any]:
+        """Get current state for compaction."""
+        return {
+            "current_room": self.current_room,
+            "equipped_items": self.inventory_state.get("equipped_slots", {}),
+            "active_goals": self.context_manager.active_goals,
+        }
+
+    def set_context_budgets(self, budgets: Dict[str, int]) -> None:
+        """Set token budgets per activity type."""
+        self.context_budgets = {
+            "combat": budgets.get("combat", 6000),
+            "exploration": budgets.get("exploration", 5000),
+            "conversation": budgets.get("conversation", 4500),
+            "idle": budgets.get("idle", 3000),
+        }
+
+    def add_goal(self, goal: str) -> None:
+        """Add an active goal for relevance boosting."""
+        self.context_manager.add_goal(goal)
+
+    def remove_goal(self, goal: str) -> None:
+        """Remove a completed goal."""
+        self.context_manager.remove_goal(goal)
+
+    def get_active_goals(self) -> List[str]:
+        """Get list of active goals."""
+        return list(self.context_manager.active_goals)
+
+    def add_loot_event(self, loot: str) -> None:
+        """Record a loot event for relevance boosting."""
+        self.context_manager.add_loot_event(loot)
 
     async def play_loop(self, max_iterations: int = 100):
         for i in range(max_iterations):
