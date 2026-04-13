@@ -24,8 +24,21 @@ Enable LLMs to autonomously play MUD games through:
 **Context:**
 - **Codebase:** 1,490 lines production code, 613 lines tests
 - **Stack:** Python 3.9+, asyncio, websockets, inventory module
-- **Status:** v1.0 shipped, ready for v1.1 planning
+- **Status:** v1.0 shipped, v1.1 planning
 - **Tests:** 79/81 passing (97.5%)
+
+---
+
+## Current Milestone: v1.1 Cognitive Upgrade
+
+**Goal:** Enhance LLM agent intelligence with preference learning, better context management, goal-directed behavior, and multi-turn conversations
+
+**Target features:**
+- Preference learning from user decisions
+- Smarter context/token management
+- Long-term planning and goal pursuit
+- Multi-turn NPC conversations
+- Improved prompt engineering
 
 ---
 
@@ -57,12 +70,19 @@ Enable LLMs to autonomously play MUD games through:
 
 **Total:** 30/30 requirements validated in v1.0
 
-### Active (v1.1 Candidates)
+### Active (v1.1 Cognitive Upgrade)
+
+- [ ] LLM preference learning from user decisions
+- [ ] Smarter context/token management with relevance filtering
+- [ ] Long-term planning and goal-directed behavior
+- [ ] Multi-turn NPC conversations
+- [ ] Improved prompt engineering and few-shot learning
+
+### Future (v1.2+ Candidates)
 
 - [ ] GMCP/MSDP protocol support for compatible MUDs
 - [ ] Weight/encumbrance tracking with configurable formulas
 - [ ] Outfit set management (swap entire gear sets)
-- [ ] LLM preference learning from user decisions
 - [ ] Multi-character inventory sharing
 - [ ] Cloud storage for cross-session sync
 
@@ -108,4 +128,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-*Last updated: 2026-04-14 after v1.0 Smart Inventory milestone*
+*Last updated: 2026-04-14 — v1.1 Cognitive Upgrade started*

@@ -1,77 +1,54 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: Smart Inventory
-status: archived
+milestone: v1.1
+milestone_name: Cognitive Upgrade
+status: defining_requirements
 last_updated: "2026-04-14T00:00:00.000Z"
 last_activity: 2026-04-14
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 5
-  completed_plans: 5
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
-# State — LLM MUD Client v1.0
+# State — LLM MUD Client v1.1
 
 ## Current Position
 
-**Phase:** 5/5 complete ✅
-**Plan:** Milestone complete — ARCHIVED
-**Status:** v1.0 archived and tagged
-**Last activity:** 2026-04-14 — Milestone v1.0 Smart Inventory archived
+**Phase:** Not started (defining requirements)
+**Plan:** —
+**Status:** Defining requirements for v1.1 Cognitive Upgrade
+**Last activity:** 2026-04-14 — Milestone v1.1 started
+
+## Project Reference
+
+See: .planning/PROJECT.md (updated 2026-04-14)
+
+**Core value:** Enable LLMs to autonomously play MUD games through telnet connectivity, WebSocket API, and intelligent agent behavior
+
+**Current focus:** v1.1 Cognitive Upgrade — LLM intelligence enhancement
 
 ## Accumulated Context
 
-### Phase 1: Core Inventory Tracking ✅
+### Milestone v1.0: Smart Inventory ✅ ARCHIVED
 
-- Inventory module created with models, parser, manager
-- MUDClient integrated with inventory tracking
-- WebSocket inventory events implemented
-- 16 unit tests passing
-- All 7 TRACK requirements delivered
+**All 5 phases complete:**
+1. ✅ Core Inventory Tracking (7 requirements)
+2. ✅ Auto-Loot System (6 requirements)
+3. ✅ LLM Integration (6 requirements)
+4. ✅ Equipment Optimization (6 requirements)
+5. ✅ Advanced Features (5 requirements)
 
-### Phase 2: Auto-Loot System ✅
+**Total:** 30/30 requirements validated
 
-- Loot rule engine with tiered rules (never/conditional/always)
-- LLM consultation for conditional items
-- Decision caching for performance
-- 15 unit tests passing
-- All 6 LOOT requirements delivered
+**Archived:**
+- `.planning/milestones/v1.0-ROADMAP.md`
+- `.planning/milestones/v1.0-REQUIREMENTS.md`
+- `.planning/MILESTONES.md`
 
-### Phase 3: LLM Integration ✅
-
-- LLMAgent extended with inventory awareness
-- Natural language query support (best/has/count/list)
-- Context-aware inventory summaries in prompts
-- 13/15 tests passing
-- All 6 LLM requirements delivered
-
-### Phase 4: Equipment Optimization ✅
-
-- Stat parsing from item descriptions
-- Item comparison with explainable results
-- Upgrade recommendations
-- 15/15 tests passing
-- All 6 EQUIP requirements delivered
-
-### Phase 5: Advanced Features ✅
-
-- Nested container hierarchy
-- Value tracking with trend detection
-- Smart organization (rule-based + LLM)
-- 20/21 tests passing
-- All 5 ADV requirements delivered
-
-## Release
-
-**v1.0 Smart Inventory** — Released 2026-04-14
-
-- GitHub Release: https://github.com/sidonsoft/llm-mud/releases/tag/v1.0
-- 1,490 lines production code
-- 613 lines tests
-- 30/30 requirements delivered
+**Tagged:** v1.0 (git tag pushed)
 
 ## Blockers/Concerns
 
@@ -80,15 +57,9 @@ progress:
 ## Session Log
 
 **2026-04-14**
-
-- Milestone v1.0 Smart Inventory started and completed
-- Research completed (4 parallel researchers + synthesizer)
-- Requirements defined (30 requirements across 5 categories)
-- All 5 phases implemented and tested
-- **v1.0 released** — https://github.com/sidonsoft/llm-mud/releases/tag/v1.0
-- **Milestone archived** — `.planning/milestones/v1.0-ROADMAP.md`, `v1.0-REQUIREMENTS.md`
-- **Git tag created** — v1.0 (pushed to origin)
-- **PROJECT.md evolved** — Requirements moved to Validated, Key Decisions updated
+- Milestone v1.1 Cognitive Upgrade started
+- Gathering requirements for LLM intelligence features
+- Defining requirements...
 
 ---
 
