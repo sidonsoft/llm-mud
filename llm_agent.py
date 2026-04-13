@@ -5,6 +5,7 @@ import time
 from typing import Dict, List, Any, Optional
 from llm_providers import LLMProvider, create_provider
 from context_manager import ContextManager, ActivityType, MemoryEntry
+from goal_manager import GoalManager
 
 
 class LLMAgent:
@@ -16,6 +17,7 @@ class LLMAgent:
         inventory_context_tokens: int = 500,
         working_memory_size: int = 20,
         config_path: str = "config.json",
+        goal_manager: Optional[GoalManager] = None,
     ):
         self.ws_url = ws_url
         self.provider = provider or create_provider("random")
@@ -32,8 +34,12 @@ class LLMAgent:
         self.inventory_context_tokens = inventory_context_tokens
         self._loot_callback_registered = False
 
+        # Goal management - wire goal_manager to context_manager if provided
+        self.goal_manager = goal_manager
         # Context management
         self.context_manager = ContextManager(working_memory_size=working_memory_size)
+        if self.goal_manager:
+            self.context_manager.goal_manager = self.goal_manager
         self.current_activity = ActivityType.IDLE
         self.token_budget = 4000
         self.current_token_estimate = 0
@@ -377,10 +383,14 @@ What do you want to do next? Respond with ONLY the command, nothing else."""
 
     def _get_state_for_compaction(self) -> Dict[str, Any]:
         """Get current state for compaction."""
+        # Get active goal names for critical state
+        active_goals = []
+        if self.goal_manager:
+            active_goals = [g.name for g in self.goal_manager.get_active_goals()]
         return {
             "current_room": self.current_room,
             "equipped_items": self.inventory_state.get("equipped_slots", {}),
-            "active_goals": self.context_manager.active_goals,
+            "active_goals": active_goals,
         }
 
     def set_context_budgets(self, budgets: Dict[str, int]) -> None:
@@ -401,8 +411,10 @@ What do you want to do next? Respond with ONLY the command, nothing else."""
         self.context_manager.remove_goal(goal)
 
     def get_active_goals(self) -> List[str]:
-        """Get list of active goals."""
-        return list(self.context_manager.active_goals)
+        """Get list of active goal names."""
+        if self.goal_manager:
+            return [g.name for g in self.goal_manager.get_active_goals()]
+        return [g.name for g in self.context_manager.get_active_goals()]
 
     def add_loot_event(self, loot: str) -> None:
         """Record a loot event for relevance boosting."""

@@ -9,6 +9,7 @@ import threading
 import time
 
 from inventory import InventoryManager, InventoryParser
+from goal_manager import GoalManager, Goal, GoalStatus
 
 
 @dataclass
@@ -49,6 +50,10 @@ class MUDClient:
         self.inventory_parser = InventoryParser()
         self.inventory_manager.parser = self.inventory_parser
         self.inventory_manager.on_update(self._on_inventory_update)
+
+        # Goal management
+        self.goal_manager = GoalManager()
+        self.goal_manager.set_on_change_callback(self._on_goal_change)
 
     def strip_ansi(self, text: str) -> str:
         ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -124,6 +129,53 @@ class MUDClient:
                 *[ws.send(message) for ws in self.websocket_clients],
                 return_exceptions=True,
             )
+
+    def _on_goal_change(self) -> None:
+        """Handle goal state changes - triggers broadcast."""
+        asyncio.create_task(self._broadcast_goal_update())
+
+    async def _broadcast_goal_update(self) -> None:
+        """Broadcast goal update to all WebSocket clients."""
+        if self.websocket_clients:
+            goals = self.goal_manager.list_goals()
+            # Get active subgoal from first active goal that has subgoals
+            active_subgoal = ""
+            for goal in goals:
+                if goal.status in (GoalStatus.ACTIVE, GoalStatus.IN_PROGRESS):
+                    active = goal.get_active_subgoal()
+                    if active:
+                        active_subgoal = active
+                        break
+
+            message = json.dumps(
+                {
+                    "type": "goal_update",
+                    "goals": [g.to_dict() for g in goals],
+                    "active_subgoal": active_subgoal,
+                }
+            )
+            await asyncio.gather(
+                *[ws.send(message) for ws in self.websocket_clients],
+                return_exceptions=True,
+            )
+
+    async def _handle_set_goal(self, data: Dict[str, Any], websocket) -> None:
+        """Handle set_goal command from WebSocket client."""
+        name = data.get("name", "")
+        description = data.get("description", "")
+
+        if not name:
+            await websocket.send(
+                json.dumps({"type": "error", "message": "Goal name is required"})
+            )
+            return
+
+        goal = self.goal_manager.create_goal(name, description)
+        await websocket.send(
+            json.dumps({"type": "goal_created", "goal": goal.to_dict()})
+        )
+        # Broadcast update to all clients
+        await self._broadcast_goal_update()
 
     async def connect(self, host: str, port: int = 23):
         self.host = host
@@ -265,6 +317,27 @@ class MUDClient:
                                     "inventory": self.inventory_manager.get_state(),
                                 }
                             )
+                        )
+                    elif msg_type == "set_goal":
+                        await self._handle_set_goal(data, websocket)
+                    elif msg_type in ("list_goals", "get_goals"):
+                        goals = self.goal_manager.list_goals()
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "type": "goals_list",
+                                    "goals": [g.to_dict() for g in goals],
+                                }
+                            )
+                        )
+                    elif msg_type == "delete_goal":
+                        name = data.get("name", "")
+                        goal_id = name.lower().replace(" ", "_")
+                        deleted = self.goal_manager.delete_goal(goal_id)
+                        if deleted:
+                            await self._broadcast_goal_update()
+                        await websocket.send(
+                            json.dumps({"type": "goal_deleted", "success": deleted})
                         )
 
                 except json.JSONDecodeError:
