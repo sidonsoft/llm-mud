@@ -1,0 +1,265 @@
+import asyncio
+import telnetlib
+import re
+import json
+import websockets
+from typing import Dict, List, Callable, Optional, Any
+from dataclasses import dataclass, field
+import threading
+import time
+
+
+@dataclass
+class Trigger:
+    pattern: str
+    callback: Callable[[str], None]
+    enabled: bool = True
+    count: int = 0
+    regex: re.Pattern = field(init=False)
+
+    def __post_init__(self):
+        self.regex = re.compile(self.pattern)
+
+
+@dataclass
+class Variable:
+    name: str
+    value: Any
+    type: str = "string"
+
+
+class MUDClient:
+    def __init__(self, host: str = "localhost", port: int = 23):
+        self.host = host
+        self.port = port
+        self.telnet = None
+        self.connected = False
+        self.buffer = ""
+        self.triggers: List[Trigger] = []
+        self.variables: Dict[str, Variable] = {}
+        self.websocket_server = None
+        self.websocket_clients = set()
+        self.command_queue = asyncio.Queue()
+        self.output_queue = asyncio.Queue()
+        self._running = False
+
+    def strip_ansi(self, text: str) -> str:
+        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+        return ansi_escape.sub("", text)
+
+    def parse_ansi(self, text: str) -> Dict[str, Any]:
+        colors = []
+        current_color = None
+        segments = []
+
+        ansi_pattern = re.compile(r"\x1B\[([0-9;]*)m")
+        last_end = 0
+
+        for match in ansi_pattern.finditer(text):
+            if match.start() > last_end:
+                segments.append(
+                    {"text": text[last_end : match.start()], "color": current_color}
+                )
+
+            codes = match.group(1).split(";") if match.group(1) else ["0"]
+            if "0" in codes:
+                current_color = None
+            else:
+                current_color = codes
+
+            last_end = match.end()
+
+        if last_end < len(text):
+            segments.append({"text": text[last_end:], "color": current_color})
+
+        return {"raw": text, "plain": self.strip_ansi(text), "segments": segments}
+
+    def add_trigger(self, pattern: str, callback: Callable[[str], None]):
+        trigger = Trigger(pattern=pattern, callback=callback)
+        self.triggers.append(trigger)
+
+    def remove_trigger(self, pattern: str):
+        self.triggers = [t for t in self.triggers if t.pattern != pattern]
+
+    def set_variable(self, name: str, value: Any, var_type: str = "string"):
+        self.variables[name] = Variable(name=name, value=value, type=var_type)
+
+    def get_variable(self, name: str) -> Optional[Any]:
+        if name in self.variables:
+            return self.variables[name].value
+        return None
+
+    def check_triggers(self, text: str):
+        plain_text = self.strip_ansi(text)
+        for trigger in self.triggers:
+            if trigger.enabled and trigger.regex.search(plain_text):
+                trigger.count += 1
+                try:
+                    trigger.callback(plain_text)
+                except Exception as e:
+                    print(f"Trigger callback error: {e}")
+
+    async def connect(self, host: str, port: int = 23):
+        self.host = host
+        self.port = port
+
+        self.telnet = await asyncio.open_connection(host, port)
+        self.connected = True
+        self._running = True
+
+        print(f"Connected to {host}:{port}")
+
+        asyncio.create_task(self._receive_loop())
+        asyncio.create_task(self._process_output_loop())
+
+    async def _receive_loop(self):
+        while self._running and self.connected and self.telnet:
+            try:
+                reader, writer = self.telnet
+                data = await reader.read(4096)
+                if not data:
+                    break
+
+                self.buffer += data.decode("utf-8", errors="ignore")
+
+                while "\n" in self.buffer:
+                    line, self.buffer = self.buffer.split("\n", 1)
+                    line = line.rstrip("\r")
+                    if line:
+                        parsed = self.parse_ansi(line)
+                        await self.output_queue.put(parsed)
+                        self.check_triggers(line)
+
+            except Exception as e:
+                print(f"Receive error: {e}")
+                break
+
+        self.connected = False
+        self._running = False
+
+    async def _process_output_loop(self):
+        while self._running:
+            try:
+                output = await self.output_queue.get()
+                await self._broadcast_to_websockets(output)
+            except Exception as e:
+                print(f"Output processing error: {e}")
+
+    async def send(self, command: str):
+        if self.connected and self.telnet:
+            _, writer = self.telnet
+            writer.write((command + "\n").encode("utf-8"))
+            await writer.drain()
+
+    async def _broadcast_to_websockets(self, output: Dict[str, Any]):
+        if self.websocket_clients:
+            message = json.dumps({"type": "output", "data": output})
+            await asyncio.gather(
+                *[ws.send(message) for ws in self.websocket_clients],
+                return_exceptions=True,
+            )
+
+    async def _handle_websocket(self, websocket):
+        self.websocket_clients.add(websocket)
+        print(f"WebSocket client connected")
+
+        try:
+            async for message in websocket:
+                try:
+                    data = json.loads(message)
+                    msg_type = data.get("type")
+
+                    if msg_type == "command":
+                        command = data.get("command", "")
+                        await self.send(command)
+                    elif msg_type == "connect":
+                        host = data.get("host")
+                        port = data.get("port", 23)
+                        if host:
+                            asyncio.create_task(self.connect(host, port))
+                    elif msg_type == "disconnect":
+                        await self.disconnect()
+                    elif msg_type == "set_variable":
+                        self.set_variable(
+                            data.get("name"),
+                            data.get("value"),
+                            data.get("type", "string"),
+                        )
+                    elif msg_type == "get_variable":
+                        name = data.get("name")
+                        value = self.get_variable(name)
+                        await websocket.send(
+                            json.dumps(
+                                {"type": "variable", "name": name, "value": value}
+                            )
+                        )
+                    elif msg_type == "add_trigger":
+                        pattern = data.get("pattern")
+                        trigger_id = data.get("id")
+                        self.add_trigger(pattern, lambda x, tid=trigger_id: None)
+                    elif msg_type == "get_state":
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "type": "state",
+                                    "connected": self.connected,
+                                    "host": self.host,
+                                    "port": self.port,
+                                    "variables": {
+                                        k: v.value for k, v in self.variables.items()
+                                    },
+                                    "triggers": [
+                                        {"pattern": t.pattern, "count": t.count}
+                                        for t in self.triggers
+                                    ],
+                                }
+                            )
+                        )
+
+                except json.JSONDecodeError:
+                    await self.send(message)
+                except Exception as e:
+                    print(f"WebSocket message error: {e}")
+        finally:
+            self.websocket_clients.remove(websocket)
+            print(f"WebSocket client disconnected")
+
+    async def start_websocket_server(self, host: str = "localhost", port: int = 8765):
+        self.websocket_server = await websockets.serve(
+            self._handle_websocket, host, port
+        )
+        print(f"WebSocket server started on ws://{host}:{port}")
+        await self.websocket_server.wait_closed()
+
+    async def disconnect(self):
+        self._running = False
+        if self.telnet:
+            self.telnet[1].close()
+        self.connected = False
+        print("Disconnected from MUD")
+
+    async def run(
+        self,
+        mud_host: str,
+        mud_port: int = 23,
+        ws_host: str = "localhost",
+        ws_port: int = 8765,
+    ):
+        await self.connect(mud_host, mud_port)
+        await self.start_websocket_server(ws_host, ws_port)
+
+
+async def main():
+    import sys
+
+    mud_host = sys.argv[1] if len(sys.argv) > 1 else "localhost"
+    mud_port = int(sys.argv[2]) if len(sys.argv) > 2 else 23
+    ws_port = int(sys.argv[3]) if len(sys.argv) > 3 else 8765
+
+    client = MUDClient()
+
+    await client.run(mud_host, mud_port, ws_port=ws_port)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
