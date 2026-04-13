@@ -4,6 +4,7 @@ from .models import Item, ItemLocation, InventoryState
 from .parser import InventoryParser, InventoryEvent
 from .manager import InventoryManager
 from .loot import AutoLootManager, LootRule, LootAction, LootDecision
+from .equipment import EquipmentOptimizer, StatComparison
 
 __all__ = [
     "Item",
@@ -16,4 +17,6 @@ __all__ = [
     "LootRule",
     "LootAction",
     "LootDecision",
+    "EquipmentOptimizer",
+    "StatComparison",
 ]
