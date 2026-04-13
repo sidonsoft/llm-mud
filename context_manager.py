@@ -44,7 +44,7 @@ class ContextManager:
         "attack",
         "enemy",
         "monster",
-        "hp",
+        "hp",  # Keep once
         "health",
         "damage",
         "wield",
@@ -65,11 +65,9 @@ class ContextManager:
         "say",
         "give",
         "receive",
-        "hp",
         "mana",
         "spell",
-        "cast",
-        "cast",
+        "cast",  # Keep once
         "level",
         "experience",
         "xp",
@@ -142,7 +140,9 @@ class ContextManager:
             state = self._state_callback()
             self._critical_state["current_room"] = state.get("current_room", "")
             self._critical_state["equipped_items"] = state.get("equipped_items", {})
-            self._critical_state["active_goals"] = list(self.active_goals)
+            self._critical_state["active_goals"] = state.get(
+                "active_goals", self.active_goals
+            )
             self._critical_state["last_messages"] = [
                 entry.content for entry in self.short_term_memory[-3:]
             ]
@@ -219,13 +219,17 @@ class ContextManager:
         # Sort by relevance score
         sorted_entries = sorted(self.short_term_memory, key=lambda e: e.relevance_score)
 
-        # Transfer lowest relevance entries (but always keep last 3)
-        to_transfer = sorted_entries[:-3]  # Keep last 3 regardless
+        # Keep top 3 by relevance, transfer the rest
+        to_keep = sorted_entries[-3:]
+        to_transfer = sorted_entries[:-3]
 
+        # Mark transferred entries and move to long-term
         for entry in to_transfer:
-            entry.is_preserved = False  # Will become summary
+            entry.is_preserved = False
             self.long_term_memory.append(entry)
-            self.short_term_memory.remove(entry)
+
+        # Replace short_term_memory with kept entries (preserves chronological order)
+        self.short_term_memory = to_keep
 
     def get_filtered_context(self, current_output: str = "") -> List[MemoryEntry]:
         """Get relevance-filtered context for build_prompt."""
