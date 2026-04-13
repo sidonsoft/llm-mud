@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 import threading
 import time
 
+from inventory import InventoryManager, InventoryParser
+
 
 @dataclass
 class Trigger:
@@ -42,6 +44,11 @@ class MUDClient:
         self.command_queue = asyncio.Queue()
         self.output_queue = asyncio.Queue()
         self._running = False
+
+        self.inventory_manager = InventoryManager()
+        self.inventory_parser = InventoryParser()
+        self.inventory_manager.parser = self.inventory_parser
+        self.inventory_manager.on_update(self._on_inventory_update)
 
     def strip_ansi(self, text: str) -> str:
         ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -99,6 +106,25 @@ class MUDClient:
                 except Exception as e:
                     print(f"Trigger callback error: {e}")
 
+    def _on_inventory_update(self, state) -> None:
+        """Handle inventory state updates."""
+        asyncio.create_task(self._broadcast_inventory_update(state))
+
+    async def _broadcast_inventory_update(self, state) -> None:
+        """Broadcast inventory update to WebSocket clients."""
+        if self.websocket_clients:
+            message = json.dumps(
+                {
+                    "type": "inventory_update",
+                    "data": state.to_dict(),
+                    "summary": state.get_summary(),
+                }
+            )
+            await asyncio.gather(
+                *[ws.send(message) for ws in self.websocket_clients],
+                return_exceptions=True,
+            )
+
     async def connect(self, host: str, port: int = 23):
         self.host = host
         self.port = port
@@ -129,6 +155,7 @@ class MUDClient:
                         parsed = self.parse_ansi(line)
                         await self.output_queue.put(parsed)
                         self.check_triggers(line)
+                        self._parse_inventory(line, parsed)
 
             except Exception as e:
                 print(f"Receive error: {e}")
@@ -136,6 +163,12 @@ class MUDClient:
 
         self.connected = False
         self._running = False
+
+    def _parse_inventory(self, line: str, parsed: Dict[str, Any]) -> None:
+        """Parse line for inventory events."""
+        event = self.inventory_parser.parse_line(line, parsed.get("segments"))
+        if event:
+            self.inventory_manager.apply_event(event)
 
     async def _process_output_loop(self):
         while self._running:
@@ -197,6 +230,23 @@ class MUDClient:
                         pattern = data.get("pattern")
                         trigger_id = data.get("id")
                         self.add_trigger(pattern, lambda x, tid=trigger_id: None)
+                    elif msg_type == "inventory_command":
+                        cmd = data.get("command")
+                        item = data.get("item")
+                        if cmd and item:
+                            await self.send(f"{cmd} {item}")
+                    elif msg_type == "inventory_query":
+                        query = data.get("query", "")
+                        items = self.inventory_manager.find_items(query)
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "type": "inventory_response",
+                                    "query": query,
+                                    "items": [i.to_dict() for i in items],
+                                }
+                            )
+                        )
                     elif msg_type == "get_state":
                         await websocket.send(
                             json.dumps(
@@ -212,6 +262,7 @@ class MUDClient:
                                         {"pattern": t.pattern, "count": t.count}
                                         for t in self.triggers
                                     ],
+                                    "inventory": self.inventory_manager.get_state(),
                                 }
                             )
                         )
