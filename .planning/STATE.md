@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: milestone
-status: completed
-last_updated: "2026-04-13T18:21:14.244Z"
-last_activity: 2026-04-13
+milestone_name: Smart Inventory
+status: archived
+last_updated: "2026-04-14T00:00:00.000Z"
+last_activity: 2026-04-14
 progress:
   total_phases: 5
-  completed_phases: 1
-  total_plans: 1
+  completed_phases: 5
+  total_plans: 5
   completed_plans: 5
   percent: 100
 ---
@@ -18,9 +18,9 @@ progress:
 ## Current Position
 
 **Phase:** 5/5 complete ✅
-**Plan:** Milestone complete — SHIPPED
-**Status:** v1.0 milestone complete
-**Last activity:** 2026-04-13
+**Plan:** Milestone complete — ARCHIVED
+**Status:** v1.0 archived and tagged
+**Last activity:** 2026-04-14 — Milestone v1.0 Smart Inventory archived
 
 ## Accumulated Context
 
@@ -86,6 +86,9 @@ progress:
 - Requirements defined (30 requirements across 5 categories)
 - All 5 phases implemented and tested
 - **v1.0 released** — https://github.com/sidonsoft/llm-mud/releases/tag/v1.0
+- **Milestone archived** — `.planning/milestones/v1.0-ROADMAP.md`, `v1.0-REQUIREMENTS.md`
+- **Git tag created** — v1.0 (pushed to origin)
+- **PROJECT.md evolved** — Requirements moved to Validated, Key Decisions updated
 
 ---
 
