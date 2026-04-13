@@ -480,6 +480,9 @@ If no subgoals can be marked complete yet, return {{"completed_indices": [], "go
                 goal.complete_subgoal(i)
                 if goal.status == GoalStatus.ACTIVE:
                     goal.status = GoalStatus.IN_PROGRESS
+                # Check if all subgoals are now complete
+                if goal.is_complete():
+                    goal.status = GoalStatus.COMPLETE
                 self.save_goals()
                 self._trigger_callback()
                 return True
