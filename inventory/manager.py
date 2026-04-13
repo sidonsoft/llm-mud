@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, Callable, TYPE_CHECKING
 
 from .models import Item, ItemLocation, InventoryState
 from .parser import InventoryParser, InventoryEvent
+from .loot import AutoLootManager
 
 if TYPE_CHECKING:
     from ..mud_client import MUDClient
@@ -18,6 +19,7 @@ class InventoryManager:
         self,
         parser: Optional[InventoryParser] = None,
         refresh_interval: int = 60,
+        auto_loot: bool = False,
     ):
         self.parser = parser or InventoryParser()
         self.state = InventoryState()
@@ -26,6 +28,11 @@ class InventoryManager:
         self._update_callbacks: list[Callable[[InventoryState], None]] = []
         self._refresh_task: Optional[asyncio.Task] = None
         self._running = False
+
+        self.auto_loot_enabled = auto_loot
+        self.auto_loot_manager: Optional[AutoLootManager] = None
+        if auto_loot:
+            self.auto_loot_manager = AutoLootManager(inventory_manager=self)
 
     def on_update(self, callback: Callable[[InventoryState], None]) -> None:
         """Register callback for inventory updates."""
@@ -99,6 +106,8 @@ class InventoryManager:
 
         elif event.event_type == "ground_item":
             self.state.add_ground_item(event.item_name)
+            if self.auto_loot_enabled and self.auto_loot_manager:
+                asyncio.create_task(self._process_auto_loot(event.item_name))
 
         elif event.event_type == "inventory_item":
             item = Item(
@@ -111,6 +120,20 @@ class InventoryManager:
             self.state.add_item(item)
 
         self._notify_update()
+
+    async def _process_auto_loot(self, item_name: str) -> None:
+        """Process auto-loot for a ground item."""
+        if self.auto_loot_manager:
+            decision = self.auto_loot_manager.evaluate_item(item_name)
+            if decision.action.value == "always":
+                await self._execute_loot_command(item_name)
+
+    async def _execute_loot_command(self, item_name: str) -> None:
+        """Execute loot command via callback."""
+        # This would be wired up to MUDClient.send() via callback
+        # For now, just clear the ground item
+        self.state.clear_ground_items()
+        print(f"Auto-loot: {item_name}")
 
     def _infer_slot(self, item_name: str) -> str:
         """Infer equipment slot from item name."""
