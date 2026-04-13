@@ -4,6 +4,9 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 
+# Import GoalManager for integration
+from goal_manager import GoalManager, Goal, GoalStatus
+
 
 class ActivityType(Enum):
     COMBAT = "combat"
@@ -100,6 +103,7 @@ class ContextManager:
         recency_weight: float = 0.4,
         keyword_weight: float = 0.4,
         activity_weight: float = 0.2,
+        goal_manager: Optional[GoalManager] = None,
     ):
         self.short_term_memory: List[MemoryEntry] = []
         self.long_term_memory: List[MemoryEntry] = []
@@ -111,7 +115,7 @@ class ContextManager:
 
         # State for relevance boosting
         self.in_combat = False
-        self.active_goals: List[str] = []
+        self.goal_manager = goal_manager or GoalManager()
         self.recent_loot_events: List[str] = []
 
         # Compaction state
@@ -140,9 +144,9 @@ class ContextManager:
             state = self._state_callback()
             self._critical_state["current_room"] = state.get("current_room", "")
             self._critical_state["equipped_items"] = state.get("equipped_items", {})
-            self._critical_state["active_goals"] = state.get(
-                "active_goals", self.active_goals
-            )
+            # Get active goal names for critical state
+            active_goals = self.goal_manager.get_active_goals()
+            self._critical_state["active_goals"] = [g.name for g in active_goals]
             self._critical_state["last_messages"] = [
                 entry.content for entry in self.short_term_memory[-3:]
             ]
@@ -199,8 +203,8 @@ class ContextManager:
                 score += 0.2
 
         # Goal relevance boost
-        for goal in self.active_goals:
-            if goal.lower() in content_lower:
+        for goal in self.goal_manager.get_active_goals():
+            if goal.name.lower() in content_lower:
                 score += 0.15
 
         # Recent loot boost
@@ -254,14 +258,22 @@ class ContextManager:
         self.in_combat = in_combat
 
     def add_goal(self, goal: str) -> None:
-        """Add an active goal for relevance boosting."""
-        if goal not in self.active_goals:
-            self.active_goals.append(goal)
+        """Add an active goal for relevance boosting.
+
+        Creates a new goal via GoalManager with the given name.
+        """
+        self.goal_manager.create_goal(goal)
 
     def remove_goal(self, goal: str) -> None:
         """Remove a completed goal."""
-        if goal in self.active_goals:
-            self.active_goals.remove(goal)
+        # goal might be the ID (with underscores) or original name
+        # Try to find and delete by checking both name and transformed name
+        goal_id = goal.lower().replace(" ", "_")
+        self.goal_manager.delete_goal(goal_id)
+
+    def get_active_goals(self) -> List[Any]:
+        """Get list of active Goal objects."""
+        return self.goal_manager.get_active_goals()
 
     def add_loot_event(self, loot: str) -> None:
         """Record a loot event for relevance boosting."""
