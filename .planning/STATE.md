@@ -3,9 +3,9 @@
 ## Current Position
 
 **Phase:** 5/5 complete ✅
-**Plan:** Milestone audit
-**Status:** All phases complete — Ready for audit
-**Last activity:** 2026-04-14 — Phase 5 Advanced Features complete
+**Plan:** Milestone complete — SHIPPED
+**Status:** v1.0 released
+**Last activity:** 2026-04-14 — Milestone v1.0 Smart Inventory shipped
 
 ## Accumulated Context
 
@@ -44,6 +44,14 @@
 - 20/21 tests passing
 - All 5 ADV requirements delivered
 
+## Release
+
+**v1.0 Smart Inventory** — Released 2026-04-14
+- GitHub Release: https://github.com/sidonsoft/llm-mud/releases/tag/v1.0
+- 1,490 lines production code
+- 613 lines tests
+- 30/30 requirements delivered
+
 ## Blockers/Concerns
 
 *None currently*
@@ -51,28 +59,11 @@
 ## Session Log
 
 **2026-04-14**
-- Project initialized
-- Milestone v1.0 Smart Inventory started
+- Milestone v1.0 Smart Inventory started and completed
 - Research completed (4 parallel researchers + synthesizer)
 - Requirements defined (30 requirements across 5 categories)
-- Roadmap created (5 phases)
-- **Phase 1: Core Inventory Tracking** — Complete
-  - 680 lines production code
-  - 134 lines tests
-- **Phase 2: Auto-Loot System** — Complete
-  - 215 lines production code
-  - 106 lines tests
-- **Phase 3: LLM Integration** — Complete
-  - 130 lines production code
-  - 106 lines tests
-- **Phase 4: Equipment Optimization** — Complete
-  - 185 lines production code
-  - 120 lines tests
-- **Phase 5: Advanced Features** — Complete
-  - 280 lines production code
-  - 147 lines tests
-
-**Total:** 1,490 lines production code, 613 lines tests, 30/30 requirements delivered
+- All 5 phases implemented and tested
+- **v1.0 released** — https://github.com/sidonsoft/llm-mud/releases/tag/v1.0
 
 ---
 
