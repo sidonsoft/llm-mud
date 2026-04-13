@@ -1,305 +1,230 @@
-# Research Synthesis: LLM MUD Client Inventory Management
+# Project Research Summary
 
-**Synthesized:** 2026-04-14  
-**Scope:** Inventory management milestone for existing LLM MUD client  
+**Project:** LLM MUD Client — v1.1 Cognitive Upgrade
+**Domain:** LLM-powered text game agent with preference learning, context management, and goal-directed behavior
+**Researched:** April 14, 2026
 **Confidence:** HIGH
-
----
 
 ## Executive Summary
 
-This is an **inventory management system for an LLM-powered MUD client** that already has telnet connectivity, WebSocket API, ANSI parsing, triggers, variables, and LLM agent integration. The research confirms the existing stack (Python 3.9+, asyncio, websockets) is sufficient—no new external dependencies required for core features. The recommended approach is a **three-layer architecture**: parsing/tracking (InventoryParser), state management (InventoryManager), and LLM awareness (LLMAgent extensions), all following the existing event-driven pattern.
+This is a **single-player LLM game agent** that plays MUDs autonomously while learning user preferences over time. The research supports augmenting the existing v1.0 architecture (telnet connectivity, WebSocket API, LLM provider abstraction) with three intelligence layers: **LangMem** for preference learning and memory management, **LangGraph** for goal-directed planning, and **ChromaDB** (in-memory mode) for semantic memory retrieval. This stack avoids over-engineering while providing production-ready patterns for context filtering, goal decomposition, and preference adaptation.
 
-The key risk is **state desynchronization** between client cache and MUD server, which can cause LLM decisions based on stale data. This is mitigated through periodic inventory refresh, parsing both success/failure messages, and confidence scoring per item. A second critical risk is **LLM context window saturation** from sending full inventory state every turn—prevented through context-aware summarization and external state storage with delta updates.
-
-The architecture leverages existing infrastructure heavily: triggers for pattern matching, variables for state snapshots, and WebSocket API for real-time inventory events to the LLM agent. This is an **incremental enhancement**, not a rewrite, with no breaking changes to existing functionality.
-
----
+The recommended approach is **middleware-based integration**: new intelligence components sit between the existing `LLMAgent` and `LLMProvider`, requiring minimal changes to the validated v1.0 WebSocket protocol. This preserves backward compatibility while enabling progressive enhancement. Key risks include **context rot** (performance degradation with long histories), **hallucination loops** (self-reinforcing false beliefs), and **preference learning from sparse feedback** (learning wrong lessons). All three are mitigated through relevance filtering, ground-truth verification against parsed MUD state, and explicit preference capture with confidence scoring.
 
 ## Key Findings
 
-### From STACK.md
+### Recommended Stack
 
-**Core Technology Decisions:**
-| Technology | Decision | Rationale |
-|------------|----------|-----------|
-| **Python stdlib dataclasses** | Use for Item models | No new dependency, sufficient for simple tracking |
-| **Pydantic** | Defer (optional later) | Only needed if complex validation emerges |
-| **websockets 12.x→16.x** | Update incrementally | Breaking changes in v14+, test before upgrading |
-| **openai 1.x** | Keep current version | v2.x has breaking API changes, migrate separately |
+**Core additions for v1.1:**
 
-**What NOT to Add:**
-- ❌ Database/ORM (inventory is session-state, not persistent)
-- ❌ Message queues (single-process, WebSocket queue sufficient)
-- ❌ REST/GraphQL API (WebSocket already provides real-time bidirectional)
-- ❌ External caching (Python dict fits <1000 items easily)
+| Technology | Purpose | Why Recommended |
+|------------|---------|-----------------|
+| **langmem** (^0.1.0) | Preference learning, user profiles, episodic memory | Official LangChain memory library, built for this exact use case |
+| **langgraph** (^0.2.0) | Stateful agent orchestration, goal planning | Low-level control for agentic loops, durable execution |
+| **chromadb** (^0.5.0) | In-memory vector store for semantic search | Zero infrastructure, <50ms retrieval, perfect for single-user client |
+| **tiktoken** (^0.7.0) | Token counting and context budgeting | OpenAI's tokenizer, essential for window management |
+| **langchain-core** (^1.3.0) | Message types, memory interfaces | Required dependency, standardizes formats |
 
-**Integration Pattern:** Extend existing `MUDClient` with `inventory_manager` and `inventory_parser` instances, modify `_receive_loop()` to parse inventory events, broadcast via WebSocket to `LLMAgent`.
+**Keep existing:** LLM provider abstraction (`llm_providers.py`), WebSocket API, asyncio event loop, trigger/variable system. No replacement needed—augmentation only.
 
----
+**Total new dependencies:** 7 packages, ~150MB install size.
 
-### From FEATURES.md
+### Expected Features
 
-**Table Stakes (Must-Have):**
-| Feature | Complexity | Notes |
-|---------|------------|-------|
-| Item tracking from MUD output | Medium | Regex triggers for multiple formats, ANSI handling |
-| Auto-loot with configurable rules | Medium | Trigger on death messages, configurable filters |
-| Equipment slot tracking | Medium | Parse varied output formats, track wielded/worn slots |
-| Container management | High | Nested containers, hierarchy tracking |
-| Basic item state | Low-Medium | Quantity, weight (if shown), condition |
+**Must have (table stakes):**
+- **Relevance-filtered context** — research shows 50%+ cost reduction, prevents token limit exhaustion
+- **Working memory + long-term memory split** — standard pattern across all agent frameworks
+- **Goal tracking with progress indicators** — users expect agents to "know what they're doing"
+- **Multi-turn conversation continuity** — 6-turn minimum history for coherent dialogue
+- **Context compaction/summarization** — long sessions exceed context windows without it
+- **Action outcome validation** — agents must verify actions succeeded before proceeding
 
-**Differentiators (Should-Have):**
-| Feature | Complexity | Value Proposition |
-|---------|------------|-------------------|
-| LLM-driven item decisions | High | LLM evaluates worth, compares stats, makes decisions |
-| Equipment optimization recommendations | High | Parse stats, compare, recommend upgrades |
-| Natural language queries | Medium-High | "What's my best weapon?" via LLM |
-| WebSocket inventory events | Low-Medium | Real-time updates to LLM without polling |
+**Should have (differentiators):**
+- **Implicit preference learning** — learns from user overrides without explicit feedback; adapts loot rules, combat priorities over time
+- **Subgoal decomposition with dependency tracking** — breaks "become wealthy" into achievable steps
+- **Dynamic context prioritization** — weights context by recency, importance, goal-relevance
+- **Natural language queries** — "what's my best weapon?" or "do I have healing potions?"
 
-**Anti-Features (Explicitly NOT Build):**
-- ❌ Hardcoded MUD-specific parsing (use configurable regex)
-- ❌ Built-in item database (massive scope creep)
-- ❌ Graphical inventory UI (out of scope for LLM client)
-- ❌ Automatic trading/auction house (game-specific, risky)
-- ❌ Weight/encumbrance calculations (MUDs vary wildly)
+**Defer (v2+):**
+- **Container management** — complex nested hierarchies, can be added incrementally
+- **Value tracking over time** — requires persistent storage design
+- **Equipment optimization recommendations** — needs MUD-specific stat parsing
+- **Cross-session personality adaptation** — requires preference learning maturity
+- **Vector database infrastructure** — ChromaDB in-memory is sufficient for v1.1
 
-**MVP Recommendation (v1.0):**
-1. Item tracking from MUD output
-2. Auto-loot with configurable rules
-3. Equipment slot tracking
-4. WebSocket inventory events
-5. LLM-driven loot decisions
+### Architecture Approach
 
-**Defer to v1.1:** Container management, value tracking, equipment optimization, smart organization.
+Three intelligence layers integrate as **middleware** between `LLMAgent` and `LLMProvider`:
 
----
+1. **Preference Learning Layer** — captures user decisions, builds preference model, influences future LLM behavior
+2. **Context Management Layer** — smart token budgeting, relevance filtering, compaction, external memory
+3. **Goal-Directed Behavior Layer** — long-term planning, subgoal decomposition, progress tracking
 
-### From ARCHITECTURE.md
+**New components:**
+1. `PreferenceLearner` (`preference_learner.py`) — logs decisions, captures feedback, builds preference prompts
+2. `ContextManager` (`context_manager.py`) — manages working/long-term/episodic memory, retrieves relevant context
+3. `GoalManager` (`goal_manager.py`) — goal decomposition, progress tracking, multi-step planning
+4. `MemoryStore` (`memory_store.py`) — unified interface for all memory types with JSON persistence
 
-**New Components:**
-| Component | Responsibility | Key API |
-|-----------|---------------|---------|
-| **InventoryManager** | Central authority for inventory state, item tracking, container management | `add_item()`, `remove_item()`, `equip_item()`, `find_items()`, `to_dict()` |
-| **InventoryParser** | Extract structured data from MUD output lines | `parse_line()`, `register_pattern()`, `set_mud_profile()` |
-| **AutoLootManager** | Configurable loot rules and execution | Rule evaluation, command queuing, loot history |
+**Modified components:** `LLMAgent` (constructor accepts managers, `build_prompt()` enriched), `LLMProvider` (optional token tracking), WebSocket protocol (7 new message types).
 
-**Modified Components:**
-| Component | Changes |
-|-----------|---------|
-| **MUDClient** | Add inventory_manager/parser instances, modify `_receive_loop()` to parse events, add `_broadcast_inventory_update()`, extend `get_state` response |
-| **LLMAgent** | Replace simple inventory list with state dict, implement `_format_inventory_summary()`, handle `inventory_update` messages, update `build_prompt()` with inventory context |
+**Backward compatible:** All v1.0 features unchanged; intelligence is opt-in via constructor parameters.
 
-**WebSocket Protocol Extensions:**
-| Message Type | Direction | Purpose |
-|--------------|-----------|---------|
-| `inventory_update` | Server → Client | Notify of inventory changes |
-| `inventory_command` | Client → Server | Execute inventory actions (get/drop/wear/remove/put/take) |
-| `inventory_query` | Client → Server | Query inventory state |
-| `inventory_response` | Server → Client | Return query results |
+### Critical Pitfalls
 
-**Build Order (Dependencies First):**
-1. InventoryParser (no dependencies)
-2. InventoryManager (depends on Parser event format)
-3. MUDClient integration (depends on Manager + Parser)
-4. LLMAgent inventory awareness (depends on MUDClient broadcasts)
-5. Inventory WebSocket commands (depends on Manager query API)
-6. AutoLootManager (depends on ground item tracking)
-7. Equipment comparison (depends on full item metadata)
-8. Container management (depends on basic tracking)
+1. **Context Rot and Performance Degradation** — LLM performance degrades non-uniformly as context grows. *Prevention:* Implement relevance filtering (retrieve only relevant context), create rolling summaries (1-3 sentence game state summary at top of each prompt), use hierarchical memory (short/medium/long-term separation).
 
----
+2. **Hallucination Loops and Context Contamination** — Agent generates incorrect info, which gets added to memory, then referenced, creating self-reinforcing false beliefs. *Prevention:* Ground truth verification (cross-reference against parsed MUD state), separate facts from inferences, source tagging (mark parsed vs. inferred info), human-in-the-loop for critical decisions.
 
-### From PITFALLS.md
+3. **Preference Learning Without Proper Feedback Signals** — Sparse, ambiguous feedback leads to incorrect preference models. *Prevention:* Explicit preference capture (structured rules vs. inference), confidence scoring (low-confidence preferences require multiple confirmations), context-aware preferences (store with metadata), preference expiration (decay unless reinforced).
 
-**Critical Pitfalls (Must Avoid):**
+4. **Goal-Directed Behavior Without Task Decomposition** — High-level goals without systematic decomposition lead to aimless wandering. *Prevention:* Tree of Thoughts structure (explicit task tree with status tracking), progress tracking (evaluate after each action), failure recovery (pre-define alternatives), feasibility checking before committing.
 
-| Pitfall | Prevention Strategy | Phase |
-|---------|---------------------|-------|
-| **State desynchronization** | Periodic full inventory refresh, parse success+failure messages, delta reconciliation, confidence scoring per item | Phase 1 |
-| **Trigger race conditions** | Multiline AND triggers with proper line delta, trigger gating (fast substring before expensive regex), state machine for operations | Phase 1 |
-| **Auto-loot over-aggression** | Tiered loot rules (never/conditional/always), pre-loot validation (weight, capacity), loot queue with LLM review for borderline items | Phase 2 |
-| **ANSI color code interference** | Strip ANSI before parsing, preserve color metadata separately for quality inference, test on raw+stripped output | Phase 1 |
-| **LLM context window saturation** | Context-aware summarization (only relevant items), tiered context injection, external state storage with deltas, context rotation | Phase 3 |
-
-**Moderate Pitfalls:**
-- Container management complexity explosion → Start with flat model, defer nesting
-- Equipment comparison without stat normalization → Build normalization layer, track character context
-- Integration conflicts with existing features → Audit triggers, use feature flags, namespaced variables
-
-**Testing Checklist (Before Complete):**
-- [ ] Tested on 3+ MUDs with different output formats
-- [ ] Handles colored and uncolored output
-- [ ] State sync verified after pickup/drop/equip/remove/consume
-- [ ] Auto-loot doesn't pick up cursed/quest items
-- [ ] LLM context token usage under 50% of window
-- [ ] No conflicts with existing triggers/aliases
-
----
+5. **Over-Engineering Memory Architecture** — Building complex vector DB systems before validating simple approaches. *Prevention:* Start simple (in-memory dict + rolling window), measure first (track actual token usage), solve specific problems not abstract "memory", progressive enhancement only when limits hit.
 
 ## Implications for Roadmap
 
-### Suggested Phase Structure
+Based on research, suggested phase structure:
 
-Based on combined research, the following phase structure minimizes risk and respects architectural dependencies:
-
-#### **Phase 1: Core Inventory Tracking** (Foundation)
-**Rationale:** No advanced features work without reliable parsing and state management. Must validate across multiple MUDs before automation.
+### Phase 1: Context Management Foundation
+**Rationale:** Context management is foundational—all other intelligence features depend on clean, relevant context. Research shows context rot causes performance degradation within 30+ minutes without filtering.
 
 **Delivers:**
-- InventoryParser with regex patterns for common MUD output formats
-- InventoryManager with Item/Container dataclasses and state tracking
-- MUDClient integration (inventory parsing in `_receive_loop()`, WebSocket broadcasts)
-- ANSI stripping pipeline with color metadata preservation
-- Periodic inventory refresh mechanism
-- Confidence scoring per item
+- `ContextManager` class with working_memory and episodic_memory (JSON-based)
+- Token budgeting and basic compaction (summarize every N turns)
+- Relevance filtering (keep last 10 turns raw, older turns summarized)
+- WebSocket: `get_context_summary`, `context_summary`, `context_compacted` messages
 
-**Features from FEATURES.md:** Item tracking from MUD output, Basic item state
+**Addresses:** Table stakes features (relevance filtering, memory split, context compaction)
 
-**Pitfalls to Avoid:** State desynchronization (Pitfall 1), Trigger race conditions (Pitfall 2), ANSI interference (Pitfall 4), Integration conflicts (Pitfall 8)
+**Avoids:** Pitfall #1 (Context Rot), Pitfall #8 (Over-Engineering Memory)
 
-**Research Needed:** NO — patterns well-documented in Mudlet docs and MUD community. Standard regex parsing.
+**Research flag:** STANDARD PATTERNS — LangMem documentation provides clear integration patterns; skip `/gsd-research-phase`.
 
 ---
 
-#### **Phase 2: Auto-Loot System** (High-Value Automation)
-**Rationale:** Builds on Phase 1 tracking. Most requested automation feature. Requires careful rule design to avoid over-aggression.
+### Phase 2: Goal-Directed Behavior
+**Rationale:** Goals provide structure for context management and preference learning. Clear goals = better context filtering. Research shows successful agents use LLM as planner to decompose goals into subgoals.
 
 **Delivers:**
-- AutoLootManager with LootRule dataclass and rule engine
-- Tiered loot rules (never/conditional/always priorities)
-- Pre-loot validation (weight, capacity, current inventory)
-- Loot queue with LLM review for borderline items
-- Ground item detection and evaluation
-- Flat container model (defer nesting)
+- `GoalManager` class with `Goal` dataclass (id, description, subgoals, progress, status)
+- Goal decomposition (manual → auto via LLM)
+- Progress tracking (event-based updates from combat/loot/level-up triggers)
+- WebSocket: `set_goal`, `get_goal_status`, `goal_progress`, `goal_completed`
 
-**Features from FEATURES.md:** Auto-loot with configurable rules, Equipment slot tracking
+**Uses:** LangGraph for state machine orchestration, Phase 1 ContextManager for storing goal history
 
-**Pitfalls to Avoid:** Auto-loot over-aggression (Pitfall 3), Container complexity (Pitfall 6)
+**Implements:** Architecture component #3 (Goal-Directed Behavior Layer)
 
-**Research Needed:** NO — standard MUD client feature with well-documented patterns.
+**Avoids:** Pitfall #4 (Goal-Directed Without Task Decomposition), Pitfall #11 (Latency/Cost Explosion)
+
+**Research flag:** NEEDS RESEARCH — Subgoal decomposition patterns for open-ended MUD goals vs. structured tasks need validation in MUD context. Run `/gsd-research-phase` for goal decomposition strategies specific to text adventures.
 
 ---
 
-#### **Phase 3: LLM Integration** (Differentiator)
-**Rationale:** Leverages existing LLM agent infrastructure. Critical to avoid context window saturation. Requires careful prompt engineering.
+### Phase 3: Preference Learning
+**Rationale:** Preferences refine behavior once goals and context are stable. Easier to tune with observable goal progress. Research shows sparse human feedback creates bottlenecks; explicit capture + confidence scoring mitigates this.
 
 **Delivers:**
-- LLMAgent inventory awareness (state dict, formatted summaries)
-- Context-aware inventory summarization for prompts
-- WebSocket inventory_command handler (get/drop/wear/remove/put/take)
-- LLM-driven loot decisions (ASK rules integration)
-- Natural language queries ("what's my best weapon?")
-- Context rotation and pruning mechanism
+- `PreferenceLearner` class with decision logging and feedback capture
+- Preference summarization (embed in prompts as "User prefers: {...}")
+- Confidence scoring for learned preferences
+- WebSocket: `preference_feedback`, `preference_learned`
 
-**Features from FEATURES.md:** LLM-driven item decisions, Natural language queries, WebSocket inventory events
+**Uses:** Phase 1 ContextManager for preference storage, existing trigger system for detecting user overrides
 
-**Pitfalls to Avoid:** LLM context window saturation (Pitfall 5)
+**Implements:** Architecture component #1 (Preference Learning Layer)
 
-**Research Needed:** YES — LLM-driven item decisions is novel application. Prompt engineering for inventory context needs validation during implementation.
+**Avoids:** Pitfall #3 (Preference Learning Without Proper Feedback), Pitfall #6 (Prompt Injection), Pitfall #7 (Model-Specific Assumptions)
+
+**Research flag:** NEEDS RESEARCH — Optimal format for preference representation (dict vs. natural language vs. structured schema) and user autonomy tolerance need experimentation. Run `/gsd-research-phase` for preference capture UX patterns.
 
 ---
 
-#### **Phase 4: Equipment Optimization** (Advanced Differentiator)
-**Rationale:** Requires full item metadata and stat parsing. MUD-specific stat systems vary widely—needs flexible normalization layer.
+### Phase 4: Integration & Refinement
+**Rationale:** Polish cross-feature interactions, optimize performance, add advanced features. Research shows embedding-based retrieval becomes valuable at 10K+ decisions; defer until foundation features validated.
 
-**Delivers:**
-- Stat parsing from item descriptions
-- Stat normalization layer (MUD-specific → common format)
-- Equipment comparison API (`compare_items()`)
-- Character-aware recommendations (class, level, build priorities)
-- Explainable comparisons ("sword B better: +3 damage vs. +1")
-- Custom stat weights configuration
+**Deliverables:**
+- Cross-feature optimization (goals influence context retrieval, preferences influence goal decomposition)
+- Embedding-based retrieval (optional, via `sentence-transformers`)
+- Advanced compaction strategies (LLM summarization vs. rule-based)
+- Performance tuning (async memory operations, caching)
+- Multi-provider testing and graceful degradation
 
-**Features from FEATURES.md:** Equipment optimization recommendations
+**Dependencies:** Phases 1-3
 
-**Pitfalls to Avoid:** Equipment comparison without context (Pitfall 7)
+**Avoids:** Pitfall #9 (Insufficient Prompt Engineering), Pitfall #10 (No Observability)
 
-**Research Needed:** YES — stat parsing varies significantly by MUD. May need MUD-specific adapters.
-
----
-
-#### **Phase 5: Advanced Features** (v1.1 Deferrals)
-**Rationale:** Complex features that depend on stable foundation. Defer until core system validated.
-
-**Delivers:**
-- Nested container management (bags in bags)
-- Value tracking over time (historical prices, trends)
-- Smart container organization (LLM-decided placement)
-- Cross-session persistence (optional SQLite)
-
-**Features from FEATURES.md:** Container management (full nesting), Value tracking, Smart organization
-
-**Pitfalls to Avoid:** Over-engineering before validating core (Pitfall 10)
-
-**Research Needed:** NO — standard features, implementation straightforward once foundation stable.
+**Research flag:** STANDARD PATTERNS — Integration patterns well-documented in LangChain/LangGraph docs; skip `/gsd-research-phase`.
 
 ---
+
+### Phase Ordering Rationale
+
+- **Context Management first** — All intelligence features depend on clean, relevant context. Research shows context rot causes performance degradation within 30+ minutes; this must be solved before adding goals or preferences.
+
+- **Goal-Directed second** — Goals provide structure for context filtering (filter by goal-relevance) and preference learning (preferences apply differently based on active goals). LangGraph integration requires stable context foundation.
+
+- **Preference Learning third** — Preferences refine behavior but are easier to tune with observable goal progress. Research shows sparse feedback creates learning bottlenecks; having goals provides clearer signal for what preferences matter.
+
+- **Integration last** — Cross-feature optimization requires all three layers to be working independently. Embedding-based retrieval only valuable after validating simpler approaches work.
 
 ### Research Flags
 
-| Phase | Needs `/gsd-research-phase`? | Reason |
-|-------|------------------------------|--------|
-| Phase 1 | NO | Well-documented patterns, standard regex parsing |
-| Phase 2 | NO | Standard MUD client feature |
-| Phase 3 | **YES** | LLM-driven decisions is novel, prompt engineering needs validation |
-| Phase 4 | **YES** | Stat parsing varies by MUD, may need MUD-specific research |
-| Phase 5 | NO | Standard features, defer until foundation validated |
+**Phases needing deeper research during planning:**
+- **Phase 2 (Goal-Directed Behavior):** Subgoal decomposition patterns for open-ended MUD goals ("explore dungeon", "become wealthy") differ from structured task research (software development, data analysis). Need MUD-specific patterns.
+- **Phase 3 (Preference Learning):** Optimal preference representation format and user autonomy tolerance need experimentation. Most RLHF research uses explicit ratings; implicit feedback from game overrides is less documented.
 
----
+**Phases with standard patterns (skip research-phase):**
+- **Phase 1 (Context Management):** LangMem documentation provides clear integration patterns for memory management, summarization, and relevance filtering.
+- **Phase 4 (Integration & Refinement):** LangGraph state machine patterns and cross-feature integration well-documented in LangChain ecosystem.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| **Stack** | HIGH | Verified against PyPI, existing code patterns confirmed, "what NOT to add" based on typical MUD architectures |
-| **Features** | HIGH | Table stakes well-documented across MUD clients and communities, auto-loot patterns standard |
-| **Architecture** | HIGH | Based on existing MUDClient architecture + Mudlet/GMCP patterns, incremental enhancement not rewrite |
-| **Pitfalls** | MEDIUM-HIGH | State desync and trigger race conditions well-documented, LLM context saturation confirmed by recent research |
+| Stack | HIGH | Official LangChain libraries (LangMem, LangGraph) with verified docs; ChromaDB lightweight use case confirmed by multiple sources |
+| Features | HIGH | Table stakes features well-documented across agent frameworks (Anthropic, JetBrains Research 2025); differentiators inferred from existing LLM integration capabilities |
+| Architecture | HIGH | Middleware pattern aligns with existing v1.0 architecture; backward compatibility verified; WebSocket protocol changes additive only |
+| Pitfalls | HIGH | Research-backed with 2024-2026 academic papers (Chroma Context Rot study, LLM Game Agent Survey, RLHF research); prevention strategies actionable |
 
-**Overall Confidence:** HIGH
+**Overall confidence:** HIGH
 
-**Gaps to Address During Planning:**
-1. **MUD output format variations** — Research identified common patterns but implementation will need flexibility for edge cases. Recommend testing on 3+ MUDs during Phase 1.
-2. **LLM prompt engineering for inventory context** — Novel application, patterns inferred but need validation. Flag Phase 3 for deeper research during planning.
-3. **Stat parsing diversity** — Different MUDs use different stat systems. Phase 4 may need MUD-specific adapters or normalization research.
+### Gaps to Address
 
----
+- **LangMem version stability:** Library is new (2025). Verify API stability with `pip show langmem` before committing to integration patterns.
+
+- **ChromaDB persistence reliability:** Need to test if `.chroma_db` directory persistence works reliably across client restarts.
+
+- **Optimal rolling window size:** Research used 10 turns for software agents; MUDs may differ (faster/slower turn rate). Validate with actual gameplay.
+
+- **User autonomy tolerance:** When should agent ask vs. act autonomously? Needs user testing during Phase 3.
+
+- **Token cost impact:** LangMem summarization should reduce costs 80-90%, but need to measure with actual gameplay sessions.
 
 ## Sources
 
-**STACK.md:**
-- websockets PyPI (v16.0, Jan 2026)
-- pydantic PyPI (v2.13.0, Apr 2026)
-- openai PyPI (v2.31.0, Apr 2026)
-- aiohttp docs (v3.13.5)
-- Mudlet regex patterns (wiki.mudlet.org, Feb 2026)
+### Primary (HIGH confidence)
+- **LangChain Documentation** — https://docs.langchain.com/oss/python/langchain/overview — Stack recommendations, integration patterns
+- **LangGraph Overview** — https://docs.langchain.com/oss/python/langgraph/overview — Goal-directed behavior patterns
+- **LangMem Conceptual Guide** — https://langchain-ai.github.io/langmem/concepts/conceptual_guide/ — Memory management, preference learning
+- **Chroma Technical Report** — "Context Rot: How Increasing Input Tokens Impacts LLM Performance" (July 2025) — Context management pitfalls
+- **Existing codebase analysis** — `llm_agent.py`, `llm_providers.py`, `mud_client.py` — Architecture baseline
 
-**FEATURES.md:**
-- Mudlet documentation and packages (wiki.mudlet.org, packages.mudlet.org)
-- MUD client comparison sites (slant.co, mudverse.com)
-- Reddit r/MUD community discussions
-- GMCP/MSDP protocol specifications (tintin.mudhalla.net, mudstandards.org)
-- Discworld MUD wiki (dwwiki.mooo.com)
+### Secondary (MEDIUM confidence)
+- **JetBrains Research** — "Cutting Through the Noise: Smarter Context Management for LLM-Powered Agents" (Dec 2025) — Observation masking outperforms LLM summarization
+- **Anthropic Engineering Blog** — "Effective context engineering for AI agents" (Sep 2025) — Context as finite resource, compaction strategies
+- **"A Survey on Large Language Model-Based Game Agents"** (arXiv, May 2024) — Goal decomposition patterns, error correction
+- **"A Survey of Reinforcement Learning from Human Feedback"** (arXiv, April 2024) — Preference learning challenges, sparse feedback bottlenecks
+- **Mudlet documentation** — wiki.mudlet.org, packages.mudlet.org — MUD inventory management patterns, trigger systems
 
-**ARCHITECTURE.md:**
-- Mudlet GMCP inventory patterns (wiki.mudlet.org)
-- GMCP item tracker forum discussion (forums.mudlet.org)
-- Existing MUDClient architecture (.planning/codebase/ARCHITECTURE.md)
-- MUD protocol standards (wiki.mudlet.org)
-
-**PITFALLS.md:**
-- Mudlet Manual: Trigger Engine (wiki.mudlet.org)
-- Mudlet Manual: Best Practices (wiki.mudlet.org)
-- Reddit r/MUD community discussions
-- arXiv:2505.12439v1 "Learning to Play Like Humans" (LLM state management)
-- Discworld MUD Wiki (dwwiki.mooo.com)
-- Mudlet forums (forums.mudlet.org)
+### Tertiary (LOW confidence)
+- **Reddit r/MUD community discussions** — Inventory management expectations, auto-loot patterns
+- **Towards Data Science** — "How I Built an LLM-Based Game from Scratch" (April 2025) — Practical implementation insights
+- **zMUD/CMUD historical documentation** — Legacy MUD client patterns for triggers and databases
 
 ---
 
-## Ready for Requirements
-
-**SUMMARY.md committed.** Orchestrator can proceed to requirements definition.
-
-All 4 research files synthesized. Key patterns identified. Roadmap implications include 5 suggested phases with clear rationale, feature assignments, and pitfall mitigations. Phase 3 (LLM Integration) and Phase 4 (Equipment Optimization) flagged for deeper research during planning.
+*Research completed: April 14, 2026*
+*Ready for roadmap: yes*
+*Files synthesized: STACK.md, FEATURES.md, ARCHITECTURE.md, PITFALLS.md*

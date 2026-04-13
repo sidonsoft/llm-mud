@@ -1,596 +1,529 @@
-# Architecture: Inventory Management Integration
+# Architecture: LLM Intelligence Integration
 
 **Analysis Date:** 2026-04-14
-**Confidence:** HIGH (based on existing architecture + Mudlet/GMCP patterns)
+**Scope:** Integration of LLM intelligence features (preference learning, context management, goal-directed behavior) with existing MUD client architecture
+**Confidence:** HIGH (based on existing architecture + context engineering best practices)
+
+---
 
 ## Executive Summary
 
-Inventory management integrates into the existing LLM MUD client through **three layers**: parsing/tracking (MUDClient), state management (new InventoryManager), and LLM awareness (LLMAgent extensions). The architecture follows the existing event-driven pattern, extending the trigger system for item detection and adding structured inventory state accessible via WebSocket.
+The v1.1 Cognitive Upgrade adds three intelligence layers on top of the existing v1.0 architecture:
+
+1. **Preference Learning Layer** — Captures user decisions, builds preference model, influences future LLM decisions
+2. **Context Management Layer** — Smart token budgeting, relevance filtering, compaction, external memory
+3. **Goal-Directed Behavior Layer** — Long-term planning, subgoal decomposition, progress tracking
+
+**Key architectural principle:** These layers integrate as **middleware components** between the existing `LLMAgent` and `LLMProvider`, requiring minimal changes to the validated v1.0 WebSocket protocol and MUD client core.
+
+---
+
+## Current Architecture (v1.0) — Baseline
+
+```
+┌─────────────────┐     WebSocket      ┌──────────────────┐
+│   MUDClient     │ ◄────────────────► │    LLMAgent      │
+│  (telnetlib)    │     JSON messages  │  (game logic)    │
+├─────────────────┤                    ├──────────────────┤
+│ - ANSI parsing  │                    │ - build_prompt() │
+│ - Trigger system│                    │ - play_loop()    │
+│ - Variables     │                    │ - current_room   │
+│ - WebSocket srv │                    │ - memory (list)  │
+└────────┬────────┘                    └────────┬─────────┘
+         │                                      │
+         │                                      ▼
+         │                            ┌──────────────────┐
+         │                            │  LLMProvider     │
+         │                            │  (abc interface) │
+         └────────────────────────────┤ - OpenAI         │
+                                      │ - Anthropic      │
+                                      │ - Ollama         │
+                                      └──────────────────┘
+```
+
+**Existing data flows:**
+- MUD output → WebSocket broadcast → `LLMAgent` receives → state update
+- `LLMAgent.build_prompt()` → `LLMProvider.chat()` → command → WebSocket → MUDClient → MUD
+
+---
+
+## New Architecture (v1.1) — Intelligence Layers
+
+```
+┌─────────────────┐     WebSocket      ┌──────────────────────────────┐
+│   MUDClient     │ ◄────────────────► │       LLMAgent               │
+│  (telnetlib)    │     JSON messages  │  (game logic + goals)        │
+├─────────────────┤                    ├──────────────────────────────┤
+│ - ANSI parsing  │                    │ - GoalManager                │
+│ - Trigger system│                    │ - PreferenceLearner          │
+│ - Variables     │                    │ - ContextManager             │
+│ - WebSocket srv │                    │ - memory (structured)        │
+└────────┬────────┘                    └──────────────┬───────────────┘
+         │                                           │
+         │                                           ▼
+         │                            ┌──────────────────────────────┐
+         │                            │   Intelligence Middleware    │
+         │                            ├──────────────────────────────┤
+         │                            │ - PreferenceLearner          │
+         │                            │ - ContextManager             │
+         │                            │ - GoalManager                │
+         └───────────────────────────►│                              │
+                                      └──────────────┬───────────────┘
+                                                     │
+                                                     ▼
+                                      ┌──────────────────────────────┐
+                                      │       LLMProvider            │
+                                      │  (unchanged from v1.0)       │
+                                      └──────────────────────────────┘
+```
+
+**Key change:** Intelligence middleware sits between `LLMAgent` and `LLMProvider`, intercepting and enriching all LLM interactions.
 
 ---
 
 ## Integration Points
 
-### Existing Components Leveraged
+### 1. Preference Learning Integration
 
-| Component | How It's Used | Extension Point |
-|-----------|---------------|-----------------|
-| `MUDClient.triggers` | Pattern matching on MUD output for item drops, loot messages, equipment changes | Add inventory-specific trigger registration |
-| `MUDClient.variables` | Store inventory state snapshots, container contents | Extend with structured inventory data |
-| `MUDClient.output_queue` | Broadcast parsed output including inventory events | Add `inventory_update` message type |
-| WebSocket `get_state` | Return inventory state to LLM agent | Extend response schema |
-| WebSocket `set_variable` | Allow LLM to mark items, set priorities | Add inventory-specific commands |
-| `LLMAgent.inventory` (existing list) | Replace with structured inventory manager | Upgrade from simple list to full tracking |
+**What it does:** Learns from user corrections, feedback, and decisions to influence future LLM behavior without fine-tuning.
 
----
+**Integration point:** Intercepts `LLMProvider.chat()` calls, logs decision contexts, applies preference scoring to future prompts.
 
-## New Components
-
-### 1. InventoryManager (New Module: `inventory_manager.py`)
-
-**Purpose:** Central authority for all inventory state, item tracking, and container management.
-
-**Responsibilities:**
-- Parse MUD output for inventory-related events (loot, equipment, containers)
-- Maintain structured item database with metadata
-- Track item locations (inventory, equipped, containers, ground, room)
-- Provide query API for LLM agent
-- Emit inventory change events via WebSocket
-
-**Key Data Structures:**
-
-```python
-@dataclass
-class Item:
-    item_id: str              # Unique identifier (hash of name + context)
-    name: str                 # Base item name
-    description: str          # Full description from MUD
-    item_type: str            # weapon, armor, container, consumable, etc.
-    location: ItemLocation    # INVENTORY, EQUIPPED, CONTAINER, GROUND, ROOM
-    container_id: Optional[str]  # If in container, which container
-    quantity: int             # Stack size
-    weight: Optional[float]   # If parsed from description
-    value: Optional[int]      # Currency value (if known)
-    equipped_slot: Optional[str]  # If equipped: head, chest, weapon, etc.
-    stats: Dict[str, Any]     # Parsed stats: +5 strength, AC 10, etc.
-    acquired_at: float        # Timestamp
-    metadata: Dict[str, Any]  # Custom flags: auto_loot, keep, sell, ignore
-
-class InventoryState:
-    items: Dict[str, Item]           # item_id -> Item
-    containers: Dict[str, Container] # container_id -> Container
-    equipped: Dict[str, str]         # slot -> item_id
-    ground_items: List[str]          # item_ids on ground in current room
-    room_items: Dict[str, List[str]] # room_id -> item_ids
+```
+User overrides LLM decision
+    ↓
+PreferenceLearner captures: (context, rejected_action, accepted_action, timestamp)
+    ↓
+Stores in preference_memory.json
+    ↓
+Future prompts include: "User prefers: {summarized_preferences}"
 ```
 
-**Public API:**
+**New component:** `preference_learner.py`
+- `PreferenceLearner` class
+- Methods: `log_decision()`, `log_feedback()`, `get_preferences()`, `build_preference_prompt()`
+- Storage: `preference_memory.json` (session + cross-session)
 
-```python
-class InventoryManager:
-    def add_item(self, item: Item) -> None
-    def remove_item(self, item_id: str) -> None
-    def move_item(self, item_id: str, new_location: ItemLocation, 
-                  container_id: Optional[str] = None) -> None
-    def equip_item(self, item_id: str, slot: str) -> None
-    def unequip_item(self, item_id: str) -> None
-    def get_inventory(self) -> List[Item]
-    def get_equipped(self) -> Dict[str, Item]
-    def get_container_contents(self, container_id: str) -> List[Item]
-    def get_ground_items(self) -> List[Item]
-    def find_items(self, name_pattern: str) -> List[Item]
-    def compare_items(self, item_id1: str, item_id2: str) -> ItemComparison
-    def to_dict(self) -> Dict  # For WebSocket serialization
-```
+**Modified component:** `llm_agent.py`
+- `LLMAgent` constructor accepts `preference_learner: PreferenceLearner`
+- `build_prompt()` calls `preference_learner.build_preference_prompt()`
+- Decision logging after each action
 
-### 2. InventoryParser (New Module: `inventory_parser.py`)
-
-**Purpose:** Extract structured item data from raw MUD output lines.
-
-**Responsibilities:**
-- Regex patterns for common MUD inventory messages
-- ANSI-aware parsing (strip colors before matching)
-- Context-aware parsing (distinguish "You get X" from "You drop X")
-- Pluggable pattern registration for MUD-specific formats
-
-**Pattern Categories:**
-
-| Pattern Type | Example MUD Output | Captured Data |
-|--------------|-------------------|---------------|
-| Loot pickup | `You pick up a rusty sword.` | item_name, action=get |
-| Loot drop | `You drop a healing potion.` | item_name, action=drop |
-| Equipment wear | `You wear the leather armor.` | item_name, slot=chest, action=equip |
-| Equipment remove | `You remove the iron helmet.` | item_name, action=unequip |
-| Container open | `You open the sack and see: a apple, a bread` | container_name, items[] |
-| Ground items | `A gold coin lies here.` | item_name, location=ground |
-| Inventory list | `You are carrying: (10 items)` | Full inventory snapshot |
-| Equipment list | `You are wearing:` + items | Full equipment snapshot |
-
-**Implementation:**
-
-```python
-@dataclass
-class InventoryEvent:
-    event_type: str  # LOOT_GET, LOOT_DROP, EQUIP, UNEQUIP, CONTAINER_OPEN, etc.
-    item_name: str
-    item_description: Optional[str]
-    quantity: int
-    container_name: Optional[str]
-    raw_line: str
-    timestamp: float
-
-class InventoryParser:
-    def __init__(self):
-        self.patterns: List[InventoryPattern] = []
-        self._register_default_patterns()
-    
-    def parse_line(self, line: str) -> Optional[InventoryEvent]
-    def register_pattern(self, pattern: InventoryPattern) -> None
-    def set_mud_profile(self, profile_name: str) -> None  # MUD-specific patterns
-```
-
-### 3. AutoLootManager (New Module: `auto_loot.py`)
-
-**Purpose:** Configurable auto-loot rules and execution.
-
-**Responsibilities:**
-- Maintain loot rules (regex patterns + actions)
-- Evaluate ground items against rules
-- Queue loot commands for execution
-- Track loot history and statistics
-
-**Rule Structure:**
-
-```python
-@dataclass
-class LootRule:
-    rule_id: str
-    name: str
-    pattern: str              # Regex matching item names/descriptions
-    action: LootAction        # PICKUP, IGNORE, ASK, CONTAINER_STORE
-    priority: int             # Higher priority rules evaluated first
-    container_target: Optional[str]  # If storing, which container
-    conditions: List[RuleCondition]  # Optional: only if weight < X, etc.
-    enabled: bool
-
-class LootAction(enum.Enum):
-    PICKUP = "pickup"
-    IGNORE = "ignore"
-    ASK = "ask"           # Ask LLM what to do
-    CONTAINER_STORE = "store_in_container"
+**WebSocket protocol change:** NEW message type
+```json
+{
+  "type": "preference_feedback",
+  "context": "loot_decision",
+  "rejected_action": "take rusty sword",
+  "accepted_action": "ignore rusty sword",
+  "reason": "low value"
+}
 ```
 
 ---
 
-## Modified Components
+### 2. Context Management Integration
 
-### 1. MUDClient (`mud_client.py`)
+**What it does:** Smart token budgeting, relevance filtering, compaction, external memory retrieval.
 
-**Changes:**
+**Integration point:** Wraps `LLMAgent.build_prompt()` with context curation logic, manages `memory` as structured object instead of list.
 
-```python
-class MUDClient:
-    # NEW: Inventory manager instance
-    inventory_manager: Optional[InventoryManager] = None
-    
-    # NEW: Inventory parser instance
-    inventory_parser: Optional[InventoryParser] = None
-    
-    # MODIFIED: _receive_loop now passes lines to inventory parser
-    async def _receive_loop(self):
-        # ... existing code ...
-        parsed = self.parse_ansi(line)
-        await self.output_queue.put(parsed)
-        self.check_triggers(line)
-        
-        # NEW: Parse for inventory events
-        if self.inventory_parser:
-            inv_event = self.inventory_parser.parse_line(line)
-            if inv_event and self.inventory_manager:
-                self.inventory_manager.process_event(inv_event)
-                # Broadcast inventory update to WebSocket clients
-                await self._broadcast_inventory_update(inv_event)
-    
-    # NEW: Broadcast inventory state changes
-    async def _broadcast_inventory_update(self, event: InventoryEvent):
-        if self.websocket_clients:
-            message = json.dumps({
-                "type": "inventory_update",
-                "event": event.to_dict(),
-                "inventory_state": self.inventory_manager.to_dict()
-            })
-            await asyncio.gather(
-                *[ws.send(message) for ws in self.websocket_clients],
-                return_exceptions=True
-            )
-    
-    # MODIFIED: get_state response includes inventory
-    async def _handle_websocket(self, websocket):
-        # ... in get_state handler ...
-        await websocket.send(
-            json.dumps({
-                "type": "state",
-                "connected": self.connected,
-                "inventory": self.inventory_manager.to_dict() if self.inventory_manager else None,
-                # ... rest of state ...
-            })
-        )
-    
-    # NEW: Handle inventory-specific WebSocket commands
-    elif msg_type == "inventory_command":
-        # Commands: get, drop, wear, remove, put, take, compare
-        await self._handle_inventory_command(data)
+```
+Before: LLMAgent.memory = [message_dict, message_dict, ...]
+After:  ContextManager with:
+  - working_memory (short-term, in-context)
+  - long_term_memory (external, retrieved via relevance)
+  - episodic_memory (game events, summarized)
+  - procedural_memory (learned strategies)
 ```
 
-**New WebSocket Message Types:**
+**New component:** `context_manager.py`
+- `ContextManager` class
+- Methods: `add_to_memory()`, `retrieve_relevant()`, `compact()`, `get_context_budget()`
+- Storage: `memory/` directory with separate files per memory type
+- Uses embedding-based retrieval (optional, via `sentence-transformers`)
 
-| Type | Direction | Payload | Purpose |
-|------|-----------|---------|---------|
-| `inventory_update` | Server → Client | `{event, inventory_state}` | Notify of inventory changes |
-| `inventory_command` | Client → Server | `{command, item, target}` | Execute inventory actions |
-| `inventory_query` | Client → Server | `{query_type, params}` | Query inventory state |
-| `inventory_response` | Server → Client | `{query_result}` | Return query results |
+**Modified component:** `llm_agent.py`
+- `LLMAgent.memory` → `LLMAgent.context_manager: ContextManager`
+- `build_prompt()` → `context_manager.retrieve_relevant(query)` + `context_manager.compact()`
+- Token budget awareness: `context_manager.get_context_budget(remaining_tokens)`
 
-### 2. LLMAgent (`llm_agent.py`)
+**Modified component:** `llm_providers.py`
+- Optional: Add `max_context_tokens` parameter to providers
+- Providers return `usage` metadata for token tracking
 
-**Changes:**
+**WebSocket protocol change:** NEW message types
+```json
+// Request context summary from agent
+{
+  "type": "get_context_summary",
+  "query": "current goals and recent events"
+}
 
-```python
-class LLMAgent:
-    # REPLACED: Simple list with structured inventory awareness
-    # OLD: self.inventory = []
-    # NEW: Inventory state synced from MUDClient
-    inventory_state: Dict[str, Any] = {}
-    ground_items: List[Dict] = []
-    
-    # NEW: Inventory-aware prompt building
-    def build_prompt(self, output: str) -> str:
-        inventory_summary = self._format_inventory_summary()
-        ground_summary = self._format_ground_items()
-        
-        prompt = f"""Current state:
-Room: {self.current_room}
-Exits: {", ".join(self.exits) if self.exits else "unknown"}
-
-Inventory ({len(self.inventory_state.get('items', []))} items):
-{inventory_summary}
-
-Equipped:
-{self._format_equipped()}
-
-Ground items:
-{ground_summary}
-
-Last output:
-{output}
-
-Available commands: north, south, east, west, up, down, look, inventory, 
-get [item], drop [item], wear [item], remove [item], put [item] in [container],
-take [item] from [container], compare [item] [item]
-
-What do you want to do next? Respond with ONLY the command, nothing else."""
-        return prompt
-    
-    # NEW: Format inventory for LLM context
-    def _format_inventory_summary(self) -> str:
-        items = self.inventory_state.get('items', [])
-        if not items:
-            return "  (empty)"
-        
-        # Group by type, show key items
-        lines = []
-        for item in items[:10]:  # Limit context size
-            lines.append(f"  - {item['name']} ({item.get('quantity', 1)}x)")
-        if len(items) > 10:
-            lines.append(f"  ... and {len(items) - 10} more items")
-        return "\n".join(lines)
-    
-    # NEW: Handle inventory update messages
-    async def receive_output(self) -> Dict[str, Any]:
-        message = await self.websocket.recv()
-        data = json.loads(message)
-        
-        # NEW: Handle inventory updates
-        if data.get("type") == "inventory_update":
-            self.inventory_state = data.get("inventory_state", {})
-            # Don't return immediately - let LLM process in next iteration
-        
-        if data.get("type") == "output":
-            return data.get("data", {})
-        return {}
+// Agent broadcasts context compaction event
+{
+  "type": "context_compacted",
+  "before_tokens": 45000,
+  "after_tokens": 8000,
+  "summary": "Exploring northern forest, seeking level 5+ loot"
+}
 ```
-
-### 3. LLMProviders (`llm_providers.py`)
-
-**No changes required** - inventory awareness is handled in prompt construction, not provider logic.
 
 ---
 
-## Data Flows
+### 3. Goal-Directed Behavior Integration
 
-### Flow 1: Item Pickup (MUD → LLM Awareness)
+**What it does:** Long-term planning, subgoal decomposition, progress tracking, multi-step execution.
 
-```
-1. MUD sends: "You pick up a rusty sword."
-2. MUDClient._receive_loop() receives line
-3. InventoryParser.parse_line() matches "pick up" pattern
-   → Returns InventoryEvent(LOOT_GET, "rusty sword")
-4. InventoryManager.process_event() creates Item record
-   → Adds to inventory_state.items
-5. MUDClient._broadcast_inventory_update() sends WebSocket message
-6. LLMAgent.receive_output() updates self.inventory_state
-7. Next play_loop iteration: build_prompt() includes updated inventory
-8. LLM generates next command with inventory context
-```
-
-### Flow 2: LLM Drops Item (LLM → MUD Command)
+**Integration point:** Extends `LLMAgent` with goal management layer, intercepts command generation to align with active goals.
 
 ```
-1. LLM decides: "drop rusty sword"
-2. LLMAgent.send_command() sends: {"type": "command", "command": "drop rusty sword"}
-3. MUDClient._handle_websocket() receives command
-4. MUDClient.send() transmits to MUD via telnet
-5. MUD responds: "You drop the rusty sword."
-6. InventoryParser detects drop event
-7. InventoryManager moves item to ground_items
-8. WebSocket broadcast updates LLMAgent
+User sets goal: "Reach level 10 and find better armor"
+    ↓
+GoalManager.decompose() → subgoals:
+  - "Kill 50 monsters for XP"
+  - "Loot weapons/armor from drops"
+  - "Return to town when inventory full"
+    ↓
+GoalManager tracks progress, updates active subgoal
+    ↓
+LLM prompts include: "Current goal: {subgoal}. Progress: 23/50 kills"
 ```
 
-### Flow 3: Auto-Loot Decision
+**New component:** `goal_manager.py`
+- `GoalManager` class
+- `Goal` dataclass: `id`, `description`, `parent_id`, `subgoals`, `progress`, `status`
+- Methods: `set_goal()`, `decompose_goal()`, `update_progress()`, `get_active_goal()`, `get_goal_prompt()`
+- Storage: `goals.json` (cross-session persistence)
 
-```
-1. Ground items detected in room
-2. AutoLootManager.evaluate_ground_items() runs
-3. For each item:
-   a. Match against LootRule patterns (priority order)
-   b. If rule matches PICKUP → queue "get [item]" command
-   c. If rule matches IGNORE → skip
-   d. If rule matches ASK → notify LLM for decision
-4. Queued commands sent via MUDClient.send()
+**Modified component:** `llm_agent.py`
+- `LLMAgent` constructor accepts `goal_manager: GoalManager`
+- `play_loop()` checks `goal_manager.get_active_goal()` each iteration
+- `build_prompt()` includes `goal_manager.get_goal_prompt()`
+- Progress updates after significant events (combat, loot, level-up)
+
+**WebSocket protocol change:** NEW message types
+```json
+// Set a new goal
+{
+  "type": "set_goal",
+  "goal": "Reach level 10",
+  "priority": "high"
+}
+
+// Get current goal status
+{
+  "type": "get_goal_status"
+}
+
+// Agent broadcasts goal progress
+{
+  "type": "goal_progress",
+  "goal_id": "goal_001",
+  "description": "Kill 50 monsters",
+  "progress": 23,
+  "total": 50,
+  "status": "in_progress"
+}
+
+// Agent completes goal
+{
+  "type": "goal_completed",
+  "goal_id": "goal_001",
+  "description": "Kill 50 monsters"
+}
 ```
 
-### Flow 4: Equipment Comparison (LLM Query)
+---
 
+## New Components Summary
+
+| Component | File | Purpose | Dependencies |
+|-----------|------|---------|--------------|
+| `PreferenceLearner` | `preference_learner.py` | Learn from user feedback, apply to future decisions | JSON persistence |
+| `ContextManager` | `context_manager.py` | Smart memory management, relevance filtering, compaction | Optional: `sentence-transformers` for embeddings |
+| `GoalManager` | `goal_manager.py` | Goal decomposition, progress tracking, multi-step planning | JSON persistence |
+| `MemoryStore` | `memory_store.py` | Unified interface for all memory types | File I/O, optional vector DB |
+
+---
+
+## Modified Components Summary
+
+| Component | File | Changes | Backward Compatible |
+|-----------|------|---------|---------------------|
+| `LLMAgent` | `llm_agent.py` | Constructor accepts new managers, `build_prompt()` enriched, `play_loop()` goal-aware | YES — managers optional with defaults |
+| `LLMProvider` | `llm_providers.py` | Optional token usage tracking | YES — purely additive |
+| WebSocket protocol | `mud_client.py`, `llm_agent.py` | 7 new message types | YES — existing messages unchanged |
+
+---
+
+## Data Flow Changes
+
+### Existing Flow (v1.0) — Unchanged Core
 ```
-1. LLM prompt includes: "You are wearing: iron helmet (AC 5)"
-2. Inventory has: "steel helmet (AC 8)" in inventory
-3. LLM generates: "compare iron helmet steel helmet"
-4. MUDClient handles inventory_command type
-5. InventoryManager.compare_items() returns stat comparison
-6. Response sent to LLM: {"type": "inventory_response", "comparison": {...}}
-7. LLM generates: "wear steel helmet"
+MUD output → MUDClient → WebSocket → LLMAgent → state update → build_prompt() → LLMProvider → command → WebSocket → MUDClient → MUD
+```
+
+### New Flow (v1.1) — Intelligence Layers
+```
+MUD output → MUDClient → WebSocket → LLMAgent
+    ↓
+    ├─→ GoalManager.update_progress() (if combat/loot/level-up)
+    ├─→ ContextManager.add_to_memory(event=...)
+    └─→ state update
+    ↓
+build_prompt()
+    ↓
+    ├─→ ContextManager.retrieve_relevant(query="current situation")
+    ├─→ GoalManager.get_goal_prompt()
+    ├─→ PreferenceLearner.build_preference_prompt()
+    └─→ Compose enriched prompt
+    ↓
+LLMProvider.chat(enriched_prompt)
+    ↓
+command generated
+    ↓
+PreferenceLearner.log_decision(context, command, confidence)
+    ↓
+WebSocket → MUDClient → MUD
+```
+
+### New Flow — User Feedback Loop
+```
+User observes LLM decision
+    ↓
+User sends correction via WebSocket
+    ↓
+PreferenceLearner.log_feedback(context, rejected, accepted, reason)
+    ↓
+Preference memory updated
+    ↓
+Future prompts include learned preference
+    ↓
+LLM makes aligned decision
 ```
 
 ---
 
 ## WebSocket Protocol Changes
 
-### New Message Types
+### Existing Message Types (v1.0) — All Preserved
+- `output` — MUD output broadcast
+- `command` — Send command to MUD
+- `get_state` — Request full game state
+- `set_variable` — Set MUDClient variable
+- `get_variable` — Get MUDClient variable
+- `error` — Error messages
 
-#### `inventory_update` (Server → Client)
+### New Message Types (v1.1)
 
+#### Preference Learning
 ```json
+// Client → Agent
 {
-  "type": "inventory_update",
-  "event": {
-    "event_type": "LOOT_GET",
-    "item_name": "rusty sword",
-    "item_id": "abc123",
-    "quantity": 1,
-    "timestamp": 1234567890.123
-  },
-  "inventory_state": {
-    "items": [...],
-    "equipped": {...},
-    "containers": {...},
-    "ground_items": [...]
-  }
+  "type": "preference_feedback",
+  "context": "string (loot_decision|combat_target|direction_choice|...)",
+  "rejected_action": "string",
+  "accepted_action": "string",
+  "reason": "string (optional)"
+}
+
+// Agent → Client (acknowledgment)
+{
+  "type": "preference_learned",
+  "preference_id": "string",
+  "summary": "string"
 }
 ```
 
-#### `inventory_command` (Client → Server)
-
+#### Context Management
 ```json
+// Client → Agent
 {
-  "type": "inventory_command",
-  "command": "put",
-  "item": "healing potion",
-  "target": "backpack",
-  "quantity": 3
+  "type": "get_context_summary",
+  "query": "string (optional, defaults to 'current state')"
+}
+
+// Agent → Client
+{
+  "type": "context_summary",
+  "summary": "string",
+  "token_count": "number",
+  "memory_types": ["working", "episodic", "procedural"]
+}
+
+// Agent → Client (broadcast)
+{
+  "type": "context_compacted",
+  "before_tokens": "number",
+  "after_tokens": "number",
+  "trigger": "token_limit|manual|periodic"
 }
 ```
 
-Supported commands: `get`, `drop`, `wear`, `remove`, `put`, `take`, `compare`
-
-#### `inventory_query` (Client → Server)
-
+#### Goal Management
 ```json
+// Client → Agent
 {
-  "type": "inventory_query",
-  "query_type": "find",
-  "params": {
-    "name_pattern": "potion",
-    "location": "inventory"
-  }
+  "type": "set_goal",
+  "goal": "string",
+  "priority": "high|medium|low (default)",
+  "parent_goal_id": "string (optional, for subgoals)"
+}
+
+// Client → Agent
+{
+  "type": "get_goal_status",
+  "goal_id": "string (optional, returns all if omitted)"
+}
+
+// Agent → Client
+{
+  "type": "goal_status",
+  "goals": [
+    {
+      "id": "string",
+      "description": "string",
+      "progress": "number",
+      "total": "number",
+      "status": "pending|in_progress|completed|abandoned"
+    }
+  ]
+}
+
+// Agent → Client (broadcast)
+{
+  "type": "goal_progress",
+  "goal_id": "string",
+  "progress": "number",
+  "total": "number"
+}
+
+// Agent → Client (broadcast)
+{
+  "type": "goal_completed",
+  "goal_id": "string",
+  "description": "string"
 }
 ```
 
-Query types: `find`, `compare`, `container_contents`, `equipment_stats`
+---
 
-#### `inventory_response` (Server → Client)
+## Suggested Build Order
 
-```json
-{
-  "type": "inventory_response",
-  "query_type": "compare",
-  "result": {
-    "item1": {"name": "iron helmet", "AC": 5},
-    "item2": {"name": "steel helmet", "AC": 8},
-    "recommendation": "item2",
-    "diff": {"AC": "+3"}
-  }
-}
+### Phase 1: Context Management Foundation (Week 1-2)
+**Why first:** Context management is foundational — all other intelligence features depend on clean, relevant context.
+
+**Deliverables:**
+- `context_manager.py` with basic `ContextManager` class
+- Memory types: `working_memory`, `episodic_memory` (JSON-based)
+- `LLMAgent` integration: replace `memory: list` with `context_manager: ContextManager`
+- Token budgeting: track usage, implement basic compaction
+- WebSocket: `get_context_summary`, `context_summary` messages
+
+**Dependencies:** None (builds on existing `LLMAgent.memory`)
+
+**Risk:** LOW — Incremental change, backward compatible
+
+---
+
+### Phase 2: Goal-Directed Behavior (Week 2-3)
+**Why second:** Goals provide structure for context management and preference learning. Clear goals = better context filtering.
+
+**Deliverables:**
+- `goal_manager.py` with `GoalManager` class and `Goal` dataclass
+- Goal decomposition (manual → auto via LLM)
+- Progress tracking (event-based updates)
+- `LLMAgent` integration: goal-aware `build_prompt()`, `play_loop()`
+- WebSocket: `set_goal`, `get_goal_status`, `goal_progress`, `goal_completed`
+
+**Dependencies:** Phase 1 (ContextManager for storing goal history)
+
+**Risk:** MEDIUM — Requires careful event detection for progress tracking
+
+---
+
+### Phase 3: Preference Learning (Week 3-4)
+**Why third:** Preferences refine behavior once goals and context are stable. Easier to tune with observable goal progress.
+
+**Deliverables:**
+- `preference_learner.py` with `PreferenceLearner` class
+- Decision logging (context, action, outcome)
+- Feedback capture (user corrections)
+- Preference summarization (embed in prompts)
+- `LLMAgent` integration: preference-aware `build_prompt()`
+- WebSocket: `preference_feedback`, `preference_learned`
+
+**Dependencies:** Phase 1 (ContextManager for preference storage)
+
+**Risk:** MEDIUM — Preference representation and summarization need iteration
+
+---
+
+### Phase 4: Integration & Refinement (Week 4-5)
+**Why last:** Polish cross-feature interactions, optimize performance, add advanced features.
+
+**Deliverables:**
+- Cross-feature optimization (goals influence context retrieval, preferences influence goal decomposition)
+- Embedding-based retrieval (optional, via `sentence-transformers`)
+- Advanced compaction strategies (summarization via LLM)
+- Performance tuning (async memory operations, caching)
+- Documentation and examples
+
+**Dependencies:** Phases 1-3
+
+**Risk:** LOW — Refinement of working features
+
+---
+
+## Scalability Considerations
+
+| Concern | At 100 decisions | At 10K decisions | At 100K decisions |
+|---------|------------------|------------------|-------------------|
+| **Preference memory** | JSON file, fast lookup | JSON + indexing | Vector DB (optional) |
+| **Context retrieval** | Linear scan OK | Embedding-based retrieval | Hybrid search (keywords + embeddings) |
+| **Goal history** | JSON file | JSON + archiving | Database (PostgreSQL) |
+| **Token usage** | ~50K/session | ~500K/session (needs compaction) | ~5M/session (aggressive compaction required) |
+
+**Recommendation:** Start with JSON-based persistence (v1.1 scope). Add vector DB (Chroma/Weaviate) in v1.2 if needed.
+
+---
+
+## Backward Compatibility
+
+**All v1.0 features remain unchanged:**
+- Existing WebSocket clients work without modification
+- `LLMAgent` works without managers (defaults to v1.0 behavior)
+- `LLMProvider` interface unchanged
+- MUDClient unchanged
+
+**Opt-in intelligence:**
+```python
+# v1.0 style (still works)
+agent = LLMAgent(provider, host, port)
+
+# v1.1 style (with intelligence)
+context_manager = ContextManager()
+goal_manager = GoalManager()
+preference_learner = PreferenceLearner()
+agent = LLMAgent(
+    provider, host, port,
+    context_manager=context_manager,
+    goal_manager=goal_manager,
+    preference_learner=preference_learner
+)
 ```
-
----
-
-## Component Dependencies
-
-```
-┌─────────────────┐
-│   LLMAgent      │
-│  (modified)     │
-└────────┬────────┘
-         │ WebSocket
-         │ - inventory_update
-         │ - inventory_command
-         │ - inventory_query
-         │ - inventory_response
-         ▼
-┌─────────────────┐
-│   MUDClient     │
-│  (modified)     │
-└────────┬────────┘
-         │ Uses
-         ▼
-┌─────────────────┐     ┌──────────────────┐
-│ InventoryManager│────▶│  InventoryParser │
-│    (new)        │     │     (new)        │
-└────────┬────────┘     └──────────────────┘
-         │ Uses
-         ▼
-┌─────────────────┐
-│ AutoLootManager │
-│    (new)        │
-└─────────────────┘
-```
-
----
-
-## Build Order
-
-### Phase 1: Core Infrastructure (Dependencies First)
-
-**1. InventoryParser** (`inventory_parser.py`)
-- Implement regex patterns for common MUD inventory messages
-- Create InventoryEvent dataclass
-- Test with sample MUD output logs
-- **Why first:** No dependencies, enables all downstream parsing
-
-**2. InventoryManager** (`inventory_manager.py`)
-- Implement Item, Container dataclasses
-- Build inventory state management
-- Implement location tracking (inventory/equipped/container/ground)
-- Add WebSocket broadcast integration
-- **Why second:** Depends on InventoryParser event format
-
-**3. MUDClient Integration** (`mud_client.py` modifications)
-- Add inventory_manager and inventory_parser instances
-- Modify `_receive_loop()` to parse inventory events
-- Add `_broadcast_inventory_update()` method
-- Extend `get_state` response with inventory
-- **Why third:** Depends on InventoryManager + InventoryParser
-
-### Phase 2: LLM Integration
-
-**4. LLMAgent Inventory Awareness** (`llm_agent.py` modifications)
-- Replace simple inventory list with state dict
-- Implement `_format_inventory_summary()` for prompts
-- Handle `inventory_update` WebSocket messages
-- Update `build_prompt()` with inventory context
-- **Why fourth:** Depends on MUDClient sending inventory updates
-
-**5. Inventory WebSocket Commands** (`mud_client.py` enhancements)
-- Implement `inventory_command` handler
-- Add command routing: get/drop/wear/remove/put/take
-- Implement `inventory_query` handler
-- Add `inventory_response` message type
-- **Why fifth:** Depends on InventoryManager query API
-
-### Phase 3: Advanced Features
-
-**6. AutoLootManager** (`auto_loot.py`)
-- Implement LootRule dataclass and rule engine
-- Build pattern matching against ground items
-- Add loot command queuing
-- Integrate with MUDClient for automatic execution
-- **Why sixth:** Depends on ground item tracking from InventoryManager
-
-**7. Equipment Comparison** (`inventory_manager.py` enhancement)
-- Implement `compare_items()` method
-- Parse equipment stats from descriptions
-- Add stat comparison logic
-- Expose via WebSocket `inventory_response`
-- **Why seventh:** Depends on full item metadata tracking
-
-**8. Container Management** (`inventory_manager.py` enhancement)
-- Implement nested container support
-- Add `put`/`take` command handlers
-- Track container contents separately
-- **Why eighth:** Depends on basic inventory tracking
-
----
-
-## Testing Strategy
-
-### Unit Tests
-
-| Component | Test Focus |
-|-----------|-----------|
-| InventoryParser | Pattern matching accuracy, edge cases |
-| InventoryManager | State transitions, location tracking |
-| AutoLootManager | Rule evaluation, priority ordering |
-
-### Integration Tests
-
-| Flow | Test Scenario |
-|------|--------------|
-| Parser → Manager | Loot event creates correct Item record |
-| Manager → WebSocket | State change broadcasts to all clients |
-| LLMAgent → MUDClient | Inventory command executes correctly |
-
-### End-to-End Tests
-
-1. **Full loot cycle:** Ground item → pickup → inventory → equip → drop
-2. **Container operations:** Put item in container → list contents → remove
-3. **LLM decision loop:** LLM sees ground item → decides to loot → command executes
-
----
-
-## Migration Path
-
-### For Existing Code
-
-**No breaking changes** to existing functionality:
-
-- `LLMAgent.inventory` list is replaced but not relied upon heavily
-- Existing WebSocket `get_state` still works, just returns more data
-- Existing triggers continue to function alongside inventory parser
-
-### Gradual Rollout
-
-1. Deploy InventoryParser + InventoryManager (read-only mode)
-2. Enable WebSocket broadcasts (LLM can ignore)
-3. Enable LLM inventory awareness in prompts
-4. Enable inventory_command handling
-5. Enable AutoLootManager (opt-in via config)
-
----
-
-## Performance Considerations
-
-| Concern | Mitigation |
-|---------|------------|
-| Regex parsing on every line | Compile patterns once, use efficient regex |
-| WebSocket broadcast overhead | Batch inventory updates (debounce 100ms) |
-| LLM prompt size growth | Limit inventory items in context (top 10 + summary) |
-| Memory for item metadata | Prune old/irrelevant items after N minutes |
 
 ---
 
 ## Sources
 
-- **Mudlet GMCP Inventory Patterns** — https://wiki.mudlet.org/w/Manual:Miscellaneous_Functions (HIGH confidence)
-- **GMCP Item Tracker Forum Discussion** — https://forums.mudlet.org/viewtopic.php?t=3356 (MEDIUM confidence)
-- **Existing MUDClient Architecture** — `.planning/codebase/ARCHITECTURE.md` (HIGH confidence)
-- **MUD Protocol Standards (GMCP/MSDP)** — https://wiki.mudlet.org/w/Manual:Supported_Protocols (HIGH confidence)
+- **Context Engineering:** Anthropic Engineering Blog (Sep 2025) — Context as finite resource, compaction, structured note-taking
+- **Memory Architecture:** Weaviate "Context Engineering" (Dec 2025) — Six pillars, short-term vs long-term memory, retrieval strategies
+- **Preference Learning:** Preprints.org RLHF review (Mar 2025) — Online iterative RLHF, continuous feedback collection
+- **WebSocket Patterns:** Cloudflare Agents docs (Feb 2026), InfoQ "Stateful Continuation" (Feb 2026) — WebSocket for agent state sync
+- **Goal-Directed Agents:** arXiv "Agentic Memory" (Jan 2026), Nature Communications "Brain-inspired architecture" (Sep 2025) — Hierarchical planning, memory management
+
+---
+
+*Architecture analysis: 2026-04-14 — v1.1 Cognitive Upgrade*
