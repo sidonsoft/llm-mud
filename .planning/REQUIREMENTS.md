@@ -71,14 +71,34 @@
 
 ## Traceability
 
-*To be filled by roadmap — maps requirements to phases*
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| CONTEXT-01 | Phase 6 | Pending |
+| CONTEXT-02 | Phase 6 | Pending |
+| CONTEXT-03 | Phase 6 | Pending |
+| CONTEXT-04 | Phase 6 | Pending |
+| CONTEXT-05 | Phase 6 | Pending |
+| CONTEXT-06 | Phase 6 | Pending |
+| GOAL-01 | Phase 7 | Pending |
+| GOAL-02 | Phase 7 | Pending |
+| GOAL-03 | Phase 7 | Pending |
+| GOAL-04 | Phase 7 | Pending |
+| GOAL-05 | Phase 7 | Pending |
+| GOAL-06 | Phase 7 | Pending |
+| PREF-01 | Phase 8 | Pending |
+| PREF-02 | Phase 8 | Pending |
+| PREF-03 | Phase 8 | Pending |
+| PREF-04 | Phase 8 | Pending |
+| PREF-05 | Phase 8 | Pending |
+| PREF-06 | Phase 8 | Pending |
+| DIALOG-01 | Phase 9 | Pending |
+| DIALOG-02 | Phase 9 | Pending |
+| DIALOG-03 | Phase 9 | Pending |
+| DIALOG-04 | Phase 9 | Pending |
+| DIALOG-05 | Phase 9 | Pending |
+| DIALOG-06 | Phase 9 | Pending |
 
-| Phase | Requirements |
-|-------|-------------|
-| Phase 6: Context Management | CONTEXT-01 through CONTEXT-06 |
-| Phase 7: Goal-Directed Behavior | GOAL-01 through GOAL-06 |
-| Phase 8: Preference Learning | PREF-01 through PREF-06 |
-| Phase 9: Multi-Turn Conversations | DIALOG-01 through DIALOG-06 |
+**Coverage:** 24/24 requirements mapped ✓
 
 ---
 

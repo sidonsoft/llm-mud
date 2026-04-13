@@ -1,0 +1,130 @@
+# Roadmap — LLM MUD Client v1.1 Cognitive Upgrade
+
+**Version:** v1.1
+**Date:** 2026-04-14
+**Status:** Draft
+
+---
+
+## Phases
+
+- [ ] **Phase 6: Context Management** — Relevance filtering, memory split, token budgeting, context compaction
+- [ ] **Phase 7: Goal-Directed Behavior** — Natural language goal setting, subgoal decomposition, progress tracking
+- [ ] **Phase 8: Preference Learning** — Capture user feedback, learn preferences, apply to future decisions
+- [ ] **Phase 9: Multi-Turn Conversations** — NPC dialogue state, conversation tracking, context preservation
+
+---
+
+## Phase Details
+
+### Phase 6: Context Management
+**Goal:** LLM receives relevant, compacted context without token exhaustion
+**Depends on:** Phase 5 (v1.0 Smart Inventory)
+**Requirements:** CONTEXT-01, CONTEXT-02, CONTEXT-03, CONTEXT-04, CONTEXT-05, CONTEXT-06
+**Success Criteria** (what must be TRUE):
+  1. User can run 60+ minute sessions without hitting token limits (relevance filtering active)
+  2. System maintains separate working memory (current conversation) and long-term memory (historical events)
+  3. Context automatically compacts when threshold exceeded, preserving goals/preferences/key events
+  4. User can configure token budgets per activity (combat, exploration, conversation)
+  5. Rolling summaries update without losing important details (verified against ground truth)
+**Plans:** TBD
+
+### Phase 7: Goal-Directed Behavior
+**Goal:** Agent pursues user-defined goals with autonomous subgoal decomposition
+**Depends on:** Phase 6
+**Requirements:** GOAL-01, GOAL-02, GOAL-03, GOAL-04, GOAL-05, GOAL-06
+**Success Criteria** (what must be TRUE):
+  1. User can set natural language goals ("explore the dungeon", "level up to 10")
+  2. Agent decomposes high-level goals into actionable subgoals automatically
+  3. User can view progress toward goals with measurable milestones
+  4. System detects and reports goal completion or failure
+  5. Goals persist across sessions and agent prioritizes actions based on active goals
+**Plans:** TBD
+**UI hint**: yes
+
+### Phase 8: Preference Learning
+**Goal:** Agent learns and applies user preferences from decisions and corrections
+**Depends on:** Phase 6
+**Requirements:** PREF-01, PREF-02, PREF-03, PREF-04, PREF-05, PREF-06
+**Success Criteria** (what must be TRUE):
+  1. User can provide explicit feedback on agent decisions (approve/correct)
+  2. System learns preferences implicitly from user overrides (e.g., manual loot decisions)
+  3. Learned preferences display confidence scores based on frequency/consistency
+  4. User can view preference summary ("Agent knows you prefer: ...")
+  5. Preferences persist across sessions and influence future similar decisions
+**Plans:** TBD
+**UI hint**: yes
+
+### Phase 9: Multi-Turn Conversations
+**Goal:** Agent maintains coherent multi-turn conversations with NPCs
+**Depends on:** Phase 6
+**Requirements:** DIALOG-01, DIALOG-02, DIALOG-03, DIALOG-04, DIALOG-05, DIALOG-06
+**Success Criteria** (what must be TRUE):
+  1. Agent maintains conversation state for 10+ turn NPC interactions
+  2. System detects dialogue acts (greeting, question, command, farewell)
+  3. User can view conversation topic history and transitions
+  4. Conversation context preserved across interruptions (combat, loot, etc.)
+  5. Agent can manage multiple concurrent NPC conversations without confusion
+  6. Completed conversations summarized and stored in long-term memory
+**Plans:** TBD
+
+---
+
+## Progress
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 6. Context Management | 0/0 | Not started | - |
+| 7. Goal-Directed Behavior | 0/0 | Not started | - |
+| 8. Preference Learning | 0/0 | Not started | - |
+| 9. Multi-Turn Conversations | 0/0 | Not started | - |
+
+---
+
+## Coverage
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| CONTEXT-01 | Phase 6 | Pending |
+| CONTEXT-02 | Phase 6 | Pending |
+| CONTEXT-03 | Phase 6 | Pending |
+| CONTEXT-04 | Phase 6 | Pending |
+| CONTEXT-05 | Phase 6 | Pending |
+| CONTEXT-06 | Phase 6 | Pending |
+| GOAL-01 | Phase 7 | Pending |
+| GOAL-02 | Phase 7 | Pending |
+| GOAL-03 | Phase 7 | Pending |
+| GOAL-04 | Phase 7 | Pending |
+| GOAL-05 | Phase 7 | Pending |
+| GOAL-06 | Phase 7 | Pending |
+| PREF-01 | Phase 8 | Pending |
+| PREF-02 | Phase 8 | Pending |
+| PREF-03 | Phase 8 | Pending |
+| PREF-04 | Phase 8 | Pending |
+| PREF-05 | Phase 8 | Pending |
+| PREF-06 | Phase 8 | Pending |
+| DIALOG-01 | Phase 9 | Pending |
+| DIALOG-02 | Phase 9 | Pending |
+| DIALOG-03 | Phase 9 | Pending |
+| DIALOG-04 | Phase 9 | Pending |
+| DIALOG-05 | Phase 9 | Pending |
+| DIALOG-06 | Phase 9 | Pending |
+
+**Coverage:** 24/24 requirements mapped ✓
+
+---
+
+## Dependencies
+
+```
+Phase 6 (Context) → Phase 7 (Goals)
+                 → Phase 8 (Preferences)
+                 → Phase 9 (Dialog)
+
+Phase 7, 8, 9 all depend on Phase 6 (context management foundation)
+Phase 7, 8, 9 can execute in parallel after Phase 6 completes
+```
+
+---
+
+*Generated by GSD workflow*
