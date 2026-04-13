@@ -1,308 +1,382 @@
-# Technology Stack
+# Technology Stack: LLM Intelligence Features
 
-**Project:** LLM MUD Client — Inventory Management Milestone
-**Researched:** 2026-04-14
-**Scope:** Stack additions/changes for inventory management features ONLY
+**Project:** LLM MUD Client — v1.1 Cognitive Upgrade
+**Researched:** April 14, 2026
+**Focus:** Stack additions for preference learning, context management, goal-directed behavior, multi-turn conversations
+
+---
 
 ## Executive Summary
 
-**No new external dependencies required.** The existing stack (Python 3.9+, asyncio, websockets) is sufficient for implementing inventory management features. Add pydantic for robust data validation if model complexity grows.
+**Recommendation:** Add **LangMem** (LangChain's memory library) for preference learning and context management, **LangGraph** for goal-directed behavior orchestration, and **ChromaDB** (in-memory mode) for lightweight vector storage. Keep existing LLM provider implementations.
 
-## Current Stack (Validated)
+**Why this stack:**
+- Existing code already has working LLM provider abstraction (OpenAI, Anthropic, Ollama, LM Studio)
+- No need to replace — augment with memory and planning layers
+- LangMem provides production-ready preference learning with profile/collection patterns
+- LangGraph enables durable, stateful goal pursuit without rewriting agent loop
+- ChromaDB in-memory mode: zero infrastructure, <100ms retrieval, perfect for single-user client
 
-| Technology | Current Version | Latest Version | Status |
-|------------|----------------|----------------|--------|
-| Python | 3.9+ | 3.14 | ✅ Compatible |
-| websockets | >=12.0 | 16.0 (Jan 2026) | ⚠️ Update recommended |
-| aiohttp | >=3.9.0 | 3.13.5 | ✅ Compatible |
-| openai | >=1.0.0 | 2.31.0 (Apr 2026) | ⚠️ Major version change |
-| anthropic | >=0.18.0 | Current | ✅ Compatible |
+## Current Stack (Keep)
 
-## Recommended Additions
+### LLM Providers ✅
+| Technology | Version | Purpose | Keep |
+|------------|---------|---------|------|
+| `llm_providers.py` | Custom | Multi-provider abstraction | ✅ Yes — already supports OpenAI, Anthropic, Ollama, LM Studio |
+| `openai` | ^1.0.0 | OpenAI API client | ✅ Keep |
+| `anthropic` | ^0.40.0 | Anthropic API client | ✅ Keep |
+| `aiohttp` | ^3.9.0 | Async HTTP for Ollama/LM Studio | ✅ Keep |
 
-### Data Validation (Optional but Recommended)
+**Rationale:** Provider abstraction is clean, tested, and model-agnostic. No changes needed.
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| **pydantic** | 2.13.0+ | Data validation, serialization | Type-safe inventory models, automatic JSON schema, validation errors |
+### Core Infrastructure ✅
+| Technology | Version | Purpose | Keep |
+|------------|---------|---------|------|
+| `asyncio` | Built-in | Async event loop | ✅ Keep |
+| `websockets` | ^12.0 | WebSocket API | ✅ Keep |
+| `json` | Built-in | State serialization | ✅ Keep |
 
-**Rationale:**
-- Existing code uses `@dataclass` for `Trigger` and `Variable` — works fine for simple cases
-- Pydantic adds runtime validation, coercion, and better error messages
-- Critical if inventory data comes from untrusted sources or needs strict validation
-- **Decision point:** Use stdlib `dataclasses` for simplicity OR pydantic for validation
+---
 
-**Recommendation:** Start with stdlib `dataclasses` (no new dependency). Add pydantic later if:
-- Complex nested validation needed
-- Runtime type coercion becomes necessary
-- JSON schema generation required for LLM prompts
+## New Stack Additions (v1.1)
 
-### Pattern Matching (Built-in)
+### Memory & Preference Learning
 
-| Feature | Version | Purpose | Why |
-|---------|---------|---------|-----|
-| **re module** | stdlib | Regex patterns for MUD output parsing | Already used in existing code |
-| **struct pattern matching** | Python 3.10+ | Cleaner parsing logic | More readable than if/elif chains |
+| Library | Version | Purpose | Why This One |
+|---------|---------|---------|--------------|
+| **langmem** | ^0.1.0 | Preference learning, user profiles, episodic memory | Official LangChain memory library, built for exactly this use case |
+| **langchain-core** | ^1.3.0 | Message types, memory interfaces | Required dependency, standardizes message formats |
 
-**Rationale:**
-- Existing code already uses `re.compile()` for triggers
-- MUD inventory parsing needs regex for patterns like:
-  - `You are carrying:(.*)`
-  - `(\w+) \[(\w+)\]`
-  - `You pick up (\d+) gold`
-- Python 3.10+ `match` statements improve parsing code clarity
+**What it solves:**
+- Current `self.memory: List[Dict[str, str]]` (llm_agent.py line 23) is a simple list — no summarization, no preference extraction
+- LangMem provides:
+  - **Profiles**: Structured user preferences (e.g., "prefer aggressive combat", "loot everything")
+  - **Collections**: Semantic memory of past decisions and outcomes
+  - **Episodic memory**: Successful action sequences for few-shot learning
+  - **Automatic summarization**: Compress old conversations, reduce token costs 80-90%
 
-## Integration Points
-
-### With Existing `MUDClient`
-
+**Integration point:**
 ```python
-# Add to mud_client.py
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
-from enum import Enum
+# Current (llm_agent.py line 23)
+self.memory: List[Dict[str, str]] = []
 
-class ItemLocation(Enum):
-    INVENTORY = "inventory"
-    EQUIPPED = "equipped"
-    CONTAINER = "container"
-    GROUND = "ground"
+# Replace with
+from langmem import create_memory_manager, create_prompt_optimizer
+from pydantic import BaseModel
 
-@dataclass
-class Item:
-    name: str
-    quantity: int = 1
-    location: ItemLocation = ItemLocation.INVENTORY
-    container: Optional[str] = None
-    value: Optional[int] = None
-    weight: Optional[float] = None
-    keywords: List[str] = field(default_factory=list)
+class UserPreferenceProfile(BaseModel):
+    combat_style: str  # "aggressive", "defensive", "loot-focused"
+    loot_priority: str  # "always", "selective", "never"
+    preferred_weapons: list[str]
+    risk_tolerance: str  # "low", "medium", "high"
 
-# Add to MUDClient class:
-class MUDClient:
-    def __init__(self, ...):
-        # Existing fields...
-        self.inventory: Dict[str, Item] = {}
-        self.equipment: Dict[str, Item] = {}
-        self.containers: Dict[str, List[str]] = {}  # container_name -> item_ids
-```
-
-### With Existing Trigger System
-
-```python
-# Reuse existing trigger mechanism for inventory tracking
-def parse_inventory_line(line: str):
-    # Patterns to match:
-    patterns = {
-        'carry_start': r'^You are carrying:',
-        'carry_end': r'^You are carrying \d+ items?',
-        'item_with_loc': r'^(.+?) \((.+?)\)$',  # "sword (in backpack)"
-        'item_with_qty': r'^(\d+) (.+)$',  # "3 potions"
-        'equipment': r'^(.+?) \[being .+?\]$',
-        'ground_item': r'^(.+?) is here.*$',
-    }
-    
-# Add triggers in LLMAgent:
-client.add_trigger(
-    pattern=r'^You are carrying:',
-    callback=lambda x: inventory_parser.start_parsing()
+self.memory_manager = create_memory_manager(
+    model="anthropic:claude-3-5-sonnet-latest",  # or use existing provider
+    schemas=[UserPreferenceProfile],  # structured preference learning
+    instructions="Extract user preferences from MUD gameplay decisions",
+    enable_inserts=True,
 )
 ```
 
-### With Existing Variable System
+---
 
+### Goal-Directed Behavior & Planning
+
+| Library | Version | Purpose | Why This One |
+|---------|---------|---------|--------------|
+| **langgraph** | ^0.2.0 | Stateful agent orchestration, goal planning | Low-level control, durable execution, cycles for agentic loops |
+| **langchain** | ^0.3.0 | High-level agent abstractions (optional) | Use if you want prebuilt agents instead of custom LangGraph |
+
+**What it solves:**
+- Current `play_loop()` (line 253) is reactive — responds to immediate output, no long-term goals
+- LangGraph enables:
+  - **Goal state definition**: "Reach level 10", "Get best sword", "Explore dungeon"
+  - **Planning loops**: Break goals into sub-tasks, retry on failure
+  - **State persistence**: Resume from checkpoint if client crashes
+  - **Human-in-the-loop**: Pause for user input on critical decisions
+
+**Integration point:**
 ```python
-# Use existing set_variable/get_variable for LLM-accessible state
-await websocket.send(json.dumps({
-    "type": "set_variable",
-    "name": "inventory",
-    "value": {
-        "sword": {"quantity": 1, "equipped": True},
-        "potion": {"quantity": 3, "equipped": False}
-    }
-}))
+# Current (llm_agent.py line 253)
+async def play_loop(self, max_iterations: int = 100):
+    for i in range(max_iterations):
+        # Reactive: respond to last output
+        ...
+
+# Replace with LangGraph state machine
+from typing import TypedDict, Optional
+from langgraph.graph import StateGraph, MessagesState, START, END
+
+class AgentState(TypedDict):
+    messages: list[dict]
+    current_goal: Optional[str]
+    goal_stack: list[str]
+    inventory_state: dict
+    room: str
+
+# Define nodes: plan(), act(), observe(), evaluate()
+# Define edges: conditional routing based on goal completion
+graph = StateGraph(AgentState)
+graph.add_node("plan", plan_node)
+graph.add_node("act", act_node)
+graph.add_node("observe", observe_node)
+graph.add_node("evaluate", evaluate_node)
+# Add conditional edges for goal pursuit loop
 ```
+
+**Why not AutoGen/CrewAI:**
+- AutoGen: Multi-agent focused, overkill for single-player MUD client
+- CrewAI: Role-based agent teams, not needed here
+- LangGraph: Right level — single agent with stateful planning
+
+---
+
+### Vector Storage (for Semantic Memory)
+
+| Library | Version | Purpose | Why This One |
+|---------|---------|---------|--------------|
+| **chromadb** | ^0.5.0 | In-memory vector store for semantic search | Lightweight, no server needed, Python-native, <50ms retrieval |
+| **sentence-transformers** | ^3.0.0 | Local embeddings (optional, for Ollama/offline) | Run embeddings locally without API calls |
+
+**What it solves:**
+- Need to search past experiences by semantic similarity ("When did I fight a similar enemy?")
+- ChromaDB in-memory mode:
+  - Zero infrastructure (no Docker, no server)
+  - Automatic persistence to disk (optional)
+  - Metadata filtering (filter by room, enemy type, loot tier)
+  - Perfect for <10,000 memories (single user session history)
+
+**Why not Qdrant/Pinecone/Weaviate:**
+- Qdrant: Requires server deployment (Docker or cloud)
+- Pinecone: Cloud-only, API costs, overkill for single-user client
+- Weaviate: Heavy, needs Docker or cloud
+- **ChromaDB**: In-process, perfect for embedded use case
+
+**Integration point:**
+```python
+import chromadb
+from chromadb.config import Settings
+
+# In-memory with optional persistence
+client = chromadb.Client(Settings(
+    persist_directory=".chroma_db",  # optional
+    anonymized_telemetry=False
+))
+
+memory_collection = client.get_or_create_collection(
+    name="mud_memories",
+    metadata={"description": "Past gameplay experiences"}
+)
+
+# Add memory after successful action
+memory_collection.add(
+    documents=["Defeated orc with sword, took 15 damage, looted gold coin"],
+    embeddings=[embedding_model.encode("orc combat victory")],
+    metadatas=[{"room": "dungeon_entrance", "enemy": "orc", "outcome": "victory"}],
+    ids=["memory_001"]
+)
+
+# Retrieve similar situations
+results = memory_collection.query(
+    query_embeddings=[embedding_model.encode("fighting orc")],
+    n_results=3,
+    where={"outcome": "victory"}  # filter to successful outcomes
+)
+```
+
+---
+
+### Token Optimization & Context Management
+
+| Library | Version | Purpose | Why This One |
+|---------|---------|---------|--------------|
+| **tiktoken** | ^0.7.0 | Accurate token counting | OpenAI's tokenizer, essential for context window management |
+| **langchain-text-splitters** | ^0.3.0 | Intelligent text chunking | For splitting long MUD output into manageable chunks |
+
+**What it solves:**
+- Current `_format_inventory_summary()` (line 168) uses arbitrary truncation (`[:10]`)
+- Need: token-aware truncation, sliding window with summarization
+- LangMem handles this automatically with its summarization features
+
+---
+
+## Complete Installation
+
+```bash
+# Core intelligence additions
+pip install langmem langgraph langchain-core
+
+# Vector storage
+pip install chromadb
+
+# Token management
+pip install tiktoken langchain-text-splitters
+
+# Optional: local embeddings (if using Ollama/offline)
+pip install sentence-transformers
+
+# Existing dependencies (keep)
+pip install openai anthropic aiohttp websockets
+```
+
+**Total new dependencies:** 7 packages
+**Estimated install size:** ~150MB (mostly ChromaDB + transformers)
+
+---
 
 ## What NOT to Add
 
-### ❌ Database/ORM (SQLite, SQLAlchemy)
+### ❌ Full LangChain Framework
+**Why:** You already have working LLM provider abstraction. LangChain's main value is:
+1. Model abstraction → You already have this
+2. Prompt templates → You can write strings
+3. Tool integrations → Not needed (MUD commands are your tools)
 
-**Why avoid:**
-- Inventory is session-state, not persistent
-- Adds complexity without benefit for in-memory tracking
-- MUD state resets on disconnect anyway
-- **Exception:** Add if implementing cross-session item value tracking
+**Use instead:** `langchain-core` for message types, `langmem` for memory, `langgraph` for planning
 
-### ❌ Message Queue (Redis, RabbitMQ)
+### ❌ LlamaIndex
+**Why:** Built for RAG over documents/knowledge bases. Your use case:
+- Real-time conversation memory → LangMem
+- Goal planning → LangGraph
+- Semantic search over past experiences → ChromaDB + LangMem
 
-**Why avoid:**
-- Single-process architecture
-- WebSocket queue already handles async communication
-- Over-engineering for inventory state management
+LlamaIndex would be overkill.
 
-### ❌ GraphQL/REST API Layer
+### ❌ Mem0 / External Memory Services
+**Why:** Mem0 is cloud-hosted memory layer. For your use case:
+- Single-user client → No need for distributed memory
+- Already have LangMem (same capabilities, self-hosted)
+- Latency: Local ChromaDB <50ms vs Mem0 API call 100-200ms
 
-**Why avoid:**
-- WebSocket API already provides real-time bidirectional communication
-- Adding REST duplicates functionality
-- Inventory updates need push, not pull
+**Use Mem0 only if:** Building multi-user SaaS with shared memory across clients
 
-### ❌ External Caching (Redis, Memcached)
+### ❌ Redis / PostgreSQL for Memory
+**Why:** Over-engineering for single-user client
+- ChromaDB in-memory with persistence is sufficient
+- Redis: Need separate server, ops overhead
+- PostgreSQL: Need schema design, connection pooling
 
-**Why avoid:**
-- Inventory fits in memory (<1000 items typical)
-- Python dict is sufficient
-- No distributed state needed
+**Upgrade to Redis/Postgres only if:** 100+ concurrent users, need distributed memory
 
-### ❌ Complex Rule Engines
+### ❌ Ray / Celery for Task Queues
+**Why:** No async task orchestration needed yet
+- LangGraph handles sequential planning loops
+- asyncio handles concurrent WebSocket + LLM calls
 
-**Why avoid:**
-- Auto-loot rules are simple conditionals
-- `if item.value > threshold and item.weight < max: loot()`
-- Don't import Drools-style engines for 3-5 rules
+**Add only if:** Need to parallelize tool calls (e.g., query multiple MUDs simultaneously)
 
-## Version Compatibility Notes
+---
 
-### websockets 12.x → 16.x
+## Integration Architecture
 
-**Breaking changes to watch:**
-- v14+ uses new asyncio API (`websockets.asyncio.server`)
-- Existing code uses `websockets.serve()` (still works but deprecated)
-- **Recommendation:** Update incrementally, test WebSocket connections
-
-```python
-# Current (v12-v13):
-await websockets.serve(handler, host, port)
-
-# Future (v14+):
-from websockets.asyncio.server import serve
-async with serve(handler, host, port):
-    await asyncio.sleep_forever()
+```
+┌─────────────────────────────────────────────────────────┐
+│                    LLMAgent (Enhanced)                  │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌──────────────┐    ┌──────────────┐                  │
+│  │ LangGraph    │    │ LangMem      │                  │
+│  │ State Machine│    │ Memory Mgr   │                  │
+│  │              │    │              │                  │
+│  │ - plan()     │    │ - Profiles   │                  │
+│  │ - act()      │    │ - Episodes   │                  │
+│  │ - observe()  │    │ - Semantic   │                  │
+│  │ - evaluate() │    │ - Summarize  │                  │
+│  └──────────────┘    └──────────────┘                  │
+│         │                   │                           │
+│         └─────────┬─────────┘                           │
+│                   │                                     │
+│          ┌────────▼────────┐                           │
+│          │  ChromaDB       │                           │
+│          │  (Vector Store) │                           │
+│          └────────┬────────┘                           │
+│                   │                                     │
+│          ┌────────▼────────┐                           │
+│          │  Existing       │                           │
+│          │  LLM Providers  │                           │
+│          │  (Keep)         │                           │
+│          └────────┬────────┘                           │
+│                   │                                     │
+│          ┌────────▼────────┐                           │
+│          │  WebSocket API  │                           │
+│          │  (Keep)         │                           │
+│          └─────────────────┘                           │
+└─────────────────────────────────────────────────────────┘
 ```
 
-### openai 1.x → 2.x
+---
 
-**Major breaking changes:**
-- v2.x uses `client.responses.create()` (new API)
-- v1.x uses `client.chat.completions.create()` (still supported)
-- **Recommendation:** Keep v1.x for now, migrate in separate milestone
+## Version Compatibility
 
-```python
-# Current (v1.x):
-completion = client.chat.completions.create(model="gpt-4", messages=...)
+| Library | Min Version | Tested Version | Notes |
+|---------|-------------|----------------|-------|
+| Python | 3.9+ | 3.11+ | Existing requirement |
+| langmem | 0.1.0 | 0.1.0 | New in 2025, stable API |
+| langgraph | 0.2.0 | 0.2.0 | Breaking changes in 0.2.x |
+| langchain-core | 1.3.0 | 1.3.0+ | Check release notes |
+| chromadb | 0.5.0 | 0.5.0+ | In-memory mode stable |
+| tiktoken | 0.7.0 | 0.7.0+ | Stable API |
+| openai | 1.0.0 | 1.x | Existing |
+| anthropic | 0.40.0 | 0.40.x | Existing |
 
-# Future (v2.x):
-response = client.responses.create(model="gpt-4", input=...)
-```
+---
 
-## Installation Commands
+## Migration Path
 
-### Minimal (No New Dependencies)
+### Phase 1: Memory & Preferences (Week 1)
+1. Install `langmem`, `langchain-core`
+2. Replace `self.memory` list with LangMem profile manager
+3. Define `UserPreferenceProfile` schema
+4. Add memory extraction after user decisions (e.g., loot choices)
 
-```bash
-# Update existing packages
-pip install --upgrade websockets aiohttp
+### Phase 2: Token Optimization (Week 1-2)
+1. Install `tiktoken`
+2. Add token counting to `build_prompt()`
+3. Implement sliding window with LangMem summarization
+4. Test with long conversations (100+ turns)
 
-# Test inventory features work with current stack
-python -m pytest tests/test_inventory.py
-```
+### Phase 3: Semantic Memory (Week 2)
+1. Install `chromadb`
+2. Create memory collection for episodic experiences
+3. Add retrieval to `build_prompt()` (few-shot examples)
+4. Test relevance filtering
 
-### With Pydantic (Recommended for Complex Models)
+### Phase 4: Goal Planning (Week 3-4)
+1. Install `langgraph`
+2. Refactor `play_loop()` into LangGraph state machine
+3. Define goal states and planning nodes
+4. Add human-in-the-loop for critical decisions
+5. Test with multi-step goals (e.g., "get best sword")
 
-```bash
-# Core
-pip install pydantic==2.13.0
-
-# Optional: email validation for item metadata
-pip install pydantic[email]
-
-# Dev
-pip install pytest pytest-asyncio
-```
-
-### Full Production Stack
-
-```bash
-# Core
-pip install websockets==16.0 aiohttp==3.13.5 pydantic==2.13.0
-
-# LLM providers
-pip install openai==1.109.1 anthropic==0.18.0
-
-# Dev
-pip install pytest pytest-asyncio black ruff mypy
-```
-
-## Testing Strategy
-
-### Unit Tests (stdlib)
-
-```python
-import unittest
-from dataclasses import dataclass
-
-@dataclass
-class TestItem:
-    name: str
-    quantity: int
-
-class TestInventory(unittest.TestCase):
-    def test_item_creation(self):
-        item = TestItem(name="sword", quantity=1)
-        self.assertEqual(item.name, "sword")
-```
-
-### Integration Tests (with WebSocket)
-
-```python
-import asyncio
-import websockets
-
-async def test_inventory_sync():
-    async with websockets.connect("ws://localhost:8765") as ws:
-        await ws.send(json.dumps({"type": "get_state"}))
-        state = json.loads(await ws.recv())
-        assert "inventory" in state
-```
-
-## Performance Considerations
-
-| Operation | Expected Scale | Recommended Approach |
-|-----------|---------------|---------------------|
-| Item lookup | <1000 items | Python dict (O(1)) |
-| Pattern matching | 10-100 lines/sec | Pre-compiled regex |
-| Inventory updates | 1-10/sec | Direct dict mutation |
-| LLM context building | Every 5-10 turns | Serialize to JSON |
-
-**Memory footprint:** ~100KB for 1000 items with metadata
-
-## Decision Matrix
-
-| Feature | Use stdlib `dataclass` | Use `pydantic` |
-|---------|----------------------|----------------|
-| Simple item tracking | ✅ Yes | ❌ Overkill |
-| Runtime validation | ❌ No | ✅ Yes |
-| JSON serialization | Manual | Automatic |
-| LLM prompt generation | Manual | `model_dump()` |
-| Nested containers | Complex | Cleaner |
-| Learning curve | Low | Medium |
-
-**Recommendation:** Start with `dataclass`, migrate to `pydantic` if validation complexity grows.
+---
 
 ## Sources
 
-- **websockets:** https://pypi.org/project/websockets/ (v16.0, Jan 2026)
-- **pydantic:** https://pypi.org/project/pydantic/ (v2.13.0, Apr 2026)
-- **openai:** https://pypi.org/project/openai/ (v2.31.0, Apr 2026)
-- **aiohttp:** https://docs.aiohttp.org/ (v3.13.5)
-- **MUD parsing patterns:** https://wiki.mudlet.org/w/Regex (Feb 2026)
-- **Python dataclasses vs pydantic:** https://dev.to/hevalhazalkurt/dataclasses-vs-pydantic-vs-typeddict-vs-namedtuple-in-python-41gg (May 2025)
+- LangChain Documentation — https://docs.langchain.com/oss/python/langchain/overview (HIGH confidence)
+- LangGraph Overview — https://docs.langchain.com/oss/python/langgraph/overview (HIGH confidence)
+- LangMem Conceptual Guide — https://langchain-ai.github.io/langmem/concepts/conceptual_guide/ (HIGH confidence)
+- LLM Memory Systems Comparison — MachineLearningMastery.com, March 2026 (MEDIUM confidence)
+- Vector Database Comparison — AIMultiple, March 2026 (MEDIUM confidence)
+- LLM Chat History Summarization — Mem0.ai, October 2025 (MEDIUM confidence)
+- Existing codebase analysis — `llm_agent.py`, `llm_providers.py` (HIGH confidence)
+
+---
 
 ## Confidence Assessment
 
-| Area | Confidence | Notes |
-|------|-----------|-------|
-| Version compatibility | HIGH | Verified against PyPI |
-| Integration approach | HIGH | Based on existing code patterns |
-| "What NOT to add" | MEDIUM | Based on typical MUD client architectures |
-| Performance estimates | MEDIUM | Based on typical MUD scales |
+| Area | Confidence | Reason |
+|------|------------|--------|
+| LangMem recommendation | HIGH | Official LangChain library, docs verified |
+| LangGraph recommendation | HIGH | Industry standard, docs verified |
+| ChromaDB recommendation | HIGH | Multiple sources confirm lightweight use case fit |
+| "What NOT to add" | MEDIUM | Based on architectural reasoning, not production testing |
+| Version numbers | MEDIUM | Checked official docs, but verify with `pip show` before install |
+
+---
+
+## Open Questions
+
+- **LangMem version stability:** Library is new (2025). Check for breaking changes before committing.
+- **ChromaDB persistence:** Need to test if `.chroma_db` directory persistence works reliably across sessions.
+- **LangGraph learning curve:** May need 1-2 days for team to learn state machine patterns.
+- **Token cost impact:** LangMem summarization should reduce costs, but need to measure with actual gameplay.
