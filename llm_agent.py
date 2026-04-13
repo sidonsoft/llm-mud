@@ -279,12 +279,15 @@ class LLMAgent:
         filtered_memory = self.context_manager.get_filtered_context(output)
         memory_context = self._format_memory_context(filtered_memory)
 
+        # Get goal context
+        goal_context = self._format_goal_context()
+
         prompt = f"""Current state:
 Room: {self.current_room}
 Exits: {", ".join(self.exits) if self.exits else "unknown"}
 {inventory_summary}
 {memory_context}
-
+{goal_context}
 Last output:
 {output}
 
@@ -301,6 +304,25 @@ What do you want to do next? Respond with ONLY the command, nothing else."""
         lines = ["Recent relevant events:"]
         for entry in filtered_memory[-5:]:  # Last 5 relevant
             lines.append(f"- {entry.content[:100]}")
+
+        return "\n".join(lines) + "\n"
+
+    def _format_goal_context(self) -> str:
+        """Format active goals and current subgoal for LLM context."""
+        goals = self.context_manager.get_active_goals()
+        if not goals:
+            return ""
+
+        lines = ["Active goals:"]
+        for goal in goals:
+            active_subgoal = goal.get_active_subgoal()
+            status = goal.status.value
+            progress = goal.get_progress()
+            lines.append(f"- [{status}] {goal.name}")
+            if goal.subgoals:
+                lines.append(f"  Progress: {progress[0]}/{progress[1]}")
+            if active_subgoal:
+                lines.append(f"  Current: {active_subgoal}")
 
         return "\n".join(lines) + "\n"
 
@@ -420,7 +442,43 @@ What do you want to do next? Respond with ONLY the command, nothing else."""
         """Record a loot event for relevance boosting."""
         self.context_manager.add_loot_event(loot)
 
+    def _get_game_state_summary(self) -> str:
+        """Get a summary of current game state for LLM context."""
+        summary = f"Room: {self.current_room}\n"
+        summary += f"Exits: {', '.join(self.exits) if self.exits else 'unknown'}\n"
+        summary += self._format_inventory_summary()
+        return summary
+
+    async def check_and_generate_subgoals(self, game_state: str) -> None:
+        """Check if any active goal needs subgoals and generate them via LLM."""
+        if not self.goal_manager or not self.provider:
+            return
+
+        for goal in self.goal_manager.get_active_goals():
+            # Generate subgoals if goal has none
+            if not goal.subgoals:
+                await self.goal_manager.generate_subgoals(goal.name, game_state)
+
+    async def check_goal_completion(self, output_data: Dict[str, Any]) -> None:
+        """Evaluate goal progress after each output cycle."""
+        if not self.goal_manager or not self.provider:
+            return
+
+        plain_text = output_data.get("plain", "")
+        if not plain_text:
+            return
+
+        game_state = self._get_game_state_summary()
+        last_cmd = getattr(self, "last_command", "")
+
+        for goal in self.goal_manager.get_active_goals():
+            if goal.subgoals:
+                await self.goal_manager.evaluate_progress(
+                    goal.name, game_state, last_cmd
+                )
+
     async def play_loop(self, max_iterations: int = 100):
+        self.last_command = ""
         for i in range(max_iterations):
             try:
                 output_data = await asyncio.wait_for(self.receive_output(), timeout=5.0)
@@ -430,12 +488,21 @@ What do you want to do next? Respond with ONLY the command, nothing else."""
                     self.exits = []
                     self.parse_room(plain_text)
 
+                    # Check if any active goal needs subgoals
+                    await self.check_and_generate_subgoals(
+                        self._get_game_state_summary()
+                    )
+
                     prompt = self.build_prompt(plain_text)
                     command = await self.get_llm_response(prompt)
 
                     if command:
+                        self.last_command = command
                         await self.send_command(command)
                         await asyncio.sleep(1.0)
+
+                # Check goal completion after each cycle
+                await self.check_goal_completion(output_data)
 
             except asyncio.TimeoutError:
                 continue
