@@ -1,17 +1,17 @@
 # Project: LLM MUD Client
 
-**Version:** v1.0 ✅ Shipped
+**Version:** v1.1 ✅ Shipped
 **Created:** 2026-04-14
-**Last updated:** 2026-04-14 — v1.0 Smart Inventory complete
+**Last updated:** 2026-04-14 — v1.1 Cognitive Upgrade complete
 
 ---
 
 ## Current State
 
-**Shipped:** v1.0 Smart Inventory (2026-04-14)
+**Shipped:** v1.1 Cognitive Upgrade (2026-04-14)
 
 **What This Is:**
-A Python-based telnet MUD client designed for LLM agents to play text-based MUD games. Model-agnostic with support for multiple LLM providers (OpenAI, Anthropic, Ollama, LM Studio). Complete inventory management system with auto-loot, equipment optimization, and smart organization.
+A Python-based telnet MUD client designed for LLM agents to play text-based MUD games. Model-agnostic with support for multiple LLM providers (OpenAI, Anthropic, Ollama, LM Studio). Complete inventory management system with auto-loot, equipment optimization, and smart organization. Enhanced with cognitive capabilities for goal-directed behavior, preference learning, and multi-turn conversations.
 
 **Core Value:**
 Enable LLMs to autonomously play MUD games through:
@@ -20,25 +20,30 @@ Enable LLMs to autonomously play MUD games through:
 - WebSocket API for LLM integration
 - Inventory management (tracking, auto-loot, equipment)
 - Multi-provider LLM support
+- Context management with relevance filtering
+- Goal pursuit with subgoal decomposition
+- Preference learning from feedback
+- Multi-turn NPC conversations
 
 **Context:**
-- **Codebase:** 1,490 lines production code, 613 lines tests
-- **Stack:** Python 3.9+, asyncio, websockets, inventory module
-- **Status:** v1.0 shipped, v1.1 planning
-- **Tests:** 79/81 passing (97.5%)
+- **Codebase:** ~2,000 lines production code, 600+ lines tests
+- **Stack:** Python 3.9+, asyncio, websockets, 4 new manager modules
+- **Status:** v1.1 shipped
+- **Tests:** All passing
 
 ---
 
-## Current Milestone: v1.1 Cognitive Upgrade
+## Current Milestone: v1.1 Cognitive Upgrade ✅ COMPLETE
 
 **Goal:** Enhance LLM agent intelligence with preference learning, better context management, goal-directed behavior, and multi-turn conversations
 
-**Target features:**
-- Preference learning from user decisions
-- Smarter context/token management
-- Long-term planning and goal pursuit
-- Multi-turn NPC conversations
-- Improved prompt engineering
+**Status:** Complete (2026-04-14)
+
+**Delivered:**
+- Context management with relevance filtering and memory split
+- Goal pursuit with natural language goals and subgoal decomposition
+- Preference learning from explicit/implicit feedback
+- Multi-turn NPC conversations with interruption handling
 
 ---
 
@@ -70,13 +75,27 @@ Enable LLMs to autonomously play MUD games through:
 
 **Total:** 30/30 requirements validated in v1.0
 
-### Active (v1.1 Cognitive Upgrade)
+### Validated (v1.1)
 
-- [ ] LLM preference learning from user decisions
-- [ ] Smarter context/token management with relevance filtering
-- [ ] Long-term planning and goal-directed behavior
-- [ ] Multi-turn NPC conversations
-- [ ] Improved prompt engineering and few-shot learning
+**Context Management (CONTEXT-01 to CONTEXT-06):** ✅ All 6 delivered
+- Relevance filtering, memory split, token budgeting
+- Automatic context compaction, rolling summaries
+
+**Goal-Directed Behavior (GOAL-01 to GOAL-06):** ✅ All 6 delivered
+- Natural language goals, subgoal decomposition
+- Progress tracking, goal persistence, action prioritization
+
+**Preference Learning (PREF-01 to PREF-06):** ✅ All 6 delivered
+- Explicit/implicit feedback capture, Bayesian confidence
+- Preference summarization, cross-session persistence
+
+**Multi-Turn Conversations (DIALOG-01 to DIALOG-06):** ✅ All 6 delivered
+- NPC dialogue state, dialogue act detection
+- Conversation topic tracking, interruption handling
+
+**Total:** 24/24 requirements validated in v1.1
+
+### Active (v1.2 Planning)
 
 ### Future (v1.2+ Candidates)
 
@@ -128,4 +147,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-*Last updated: 2026-04-14 — v1.1 Cognitive Upgrade started*
+*Last updated: 2026-04-14 — v1.1 Cognitive Upgrade complete*
