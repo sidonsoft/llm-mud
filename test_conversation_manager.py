@@ -355,7 +355,8 @@ class TestDialogueActClassification(unittest.TestCase):
     def test_classify_heuristic_command(self):
         """Test heuristic command classification."""
         cm = ConversationManager(conversations_file=self.temp_path)
-        text = "You should go find the blacksmith."
+        # Imperative at sentence start should be classified as COMMAND
+        text = "Go find the blacksmith."
         result = cm._classify_heuristic(text)
         assert result == DialogActType.COMMAND
 

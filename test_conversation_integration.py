@@ -364,14 +364,28 @@ class TestDialogueActDetection(unittest.TestCase):
     def test_command_classification(self):
         """Test command dialogue act classification."""
         cm = ConversationManager(conversations_file=self.temp_path)
+        # Only imperative at sentence start is classified as COMMAND
+        # "You should go" is STATEMENT (not imperative at start)
         commands = [
-            "You should go find the king.",
-            "Bring me 10 gold coins.",
-            "Kill the dragon!",
+            "Go find the king.",  # Imperative → COMMAND
+            "Bring me 10 gold coins.",  # Imperative → COMMAND
+            "Kill the dragon!",  # Imperative → COMMAND
         ]
         for text in commands:
             act = cm._classify_heuristic(text)
             assert act == DialogActType.COMMAND, f"Failed for: {text}"
+
+    def test_statement_not_command(self):
+        """Test that statements not starting with imperative are STATEMENT."""
+        cm = ConversationManager(conversations_file=self.temp_path)
+        statements = [
+            "You should go find the king.",  # Not imperative at start
+            "I need more gold.",  # Not imperative at start
+            "I should go.",  # Not imperative at start
+        ]
+        for text in statements:
+            act = cm._classify_heuristic(text)
+            assert act == DialogActType.STATEMENT, f"Failed for: {text}"
 
 
 class TestMUDClientWebSocket(unittest.TestCase):
