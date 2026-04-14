@@ -332,7 +332,7 @@ class MUDClient:
                         )
                     elif msg_type == "delete_goal":
                         name = data.get("name", "")
-                        goal_id = name.lower().replace(" ", "_")
+                        goal_id = self.goal_manager.get_goal_id(name)
                         deleted = self.goal_manager.delete_goal(goal_id)
                         if deleted:
                             await self._broadcast_goal_update()

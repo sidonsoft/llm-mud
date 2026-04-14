@@ -46,6 +46,56 @@ class TestGoalManagerWithProvider(unittest.IsolatedAsyncioTestCase):
         # With random provider, we just verify it doesn't crash
         result = await gm.generate_subgoals(goal.name, "Room: dungeon")
         # Random provider may not return parseable JSON, but should not crash
+        # Verify result is either None (malformed JSON) or a list (valid JSON)
+        assert result is None or isinstance(result, list)
+
+    async def test_generate_subgoals_json_parsing_validates_output(self):
+        """Test generate_subgoals correctly parses valid JSON and rejects invalid."""
+
+        # Test with a mock provider that returns valid JSON
+        class MockProvider:
+            async def chat(self, messages):
+                return '[" subgoal 1", "subgoal 2", "subgoal 3"]'
+
+        gm = GoalManager(goals_file=self.temp_path, provider=MockProvider())
+        goal = gm.create_goal("explore", "Find treasure")
+        result = await gm.generate_subgoals(goal.name, "Room: dungeon")
+
+        assert result is not None
+        assert isinstance(result, list)
+        assert len(result) == 3
+
+        # Verify subgoals were added to the goal
+        goal_obj = gm.get_goal(goal.name)
+        assert len(goal_obj.subgoals) == 3
+
+    async def test_generate_subgoals_rejects_invalid_json(self):
+        """Test generate_subgoals handles malformed JSON gracefully."""
+
+        class MockProvider:
+            async def chat(self, messages):
+                return "This is not JSON at all"
+
+        gm = GoalManager(goals_file=self.temp_path, provider=MockProvider())
+        goal = gm.create_goal("explore", "Find treasure")
+        result = await gm.generate_subgoals(goal.name, "Room: dungeon")
+
+        # Should return None when JSON is invalid
+        assert result is None
+
+    async def test_generate_subgoals_rejects_non_list_json(self):
+        """Test generate_subgoals rejects JSON that is not a list."""
+
+        class MockProvider:
+            async def chat(self, messages):
+                return '{"key": "value"}'  # Object with no array
+
+        gm = GoalManager(goals_file=self.temp_path, provider=MockProvider())
+        goal = gm.create_goal("explore", "Find treasure")
+        result = await gm.generate_subgoals(goal.name, "Room: dungeon")
+
+        # Should return None when JSON is not a list (no array found)
+        assert result is None
 
     async def test_evaluate_progress_no_provider_returns_none(self):
         """Test evaluate_progress returns None when no provider."""

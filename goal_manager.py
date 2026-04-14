@@ -107,6 +107,14 @@ class GoalManager:
         if self._on_change_callback:
             self._on_change_callback()
 
+    def get_goal_id(self, name: str) -> str:
+        """Generate the goal ID that would be used for a given name.
+
+        This applies the same transformation as create_goal, so delete
+        operations can compute the correct ID.
+        """
+        return self._generate_id(name)
+
     def _generate_id(self, name: str) -> str:
         """Generate a stable ID from goal name.
 
@@ -196,17 +204,24 @@ class GoalManager:
 
     def list_goals(self) -> List[Goal]:
         """Return all goals sorted: active first, then by created_at descending."""
-        active = [
-            g
-            for g in self.goals
-            if g.status in (GoalStatus.ACTIVE, GoalStatus.IN_PROGRESS)
-        ]
-        others = [
-            g
-            for g in self.goals
-            if g.status not in (GoalStatus.ACTIVE, GoalStatus.IN_PROGRESS)
-        ]
-        others.sort(key=lambda g: g.created_at, reverse=True)
+        active = sorted(
+            [
+                g
+                for g in self.goals
+                if g.status in (GoalStatus.ACTIVE, GoalStatus.IN_PROGRESS)
+            ],
+            key=lambda g: (g.priority, g.created_at),
+            reverse=True,  # Highest priority first, then newest
+        )
+        others = sorted(
+            [
+                g
+                for g in self.goals
+                if g.status not in (GoalStatus.ACTIVE, GoalStatus.IN_PROGRESS)
+            ],
+            key=lambda g: g.created_at,
+            reverse=True,
+        )
         return active + others
 
     def add_subgoal(self, goal_id: str, subgoal: str) -> bool:

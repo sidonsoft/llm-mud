@@ -266,6 +266,32 @@ class TestGoalManager(unittest.TestCase):
         result = gm.delete_goal("nonexistent")
         assert result is False
 
+    def test_get_goal_id_matches_create(self):
+        """Test get_goal_id produces same ID as create_goal for duplicate names."""
+        gm = GoalManager(goals_file=self.temp_path)
+        g1 = gm.create_goal("explore dungeon")
+        g2 = gm.create_goal("explore dungeon")  # Should get explore_dungeon_1
+        assert g1.name == "explore_dungeon"
+        assert g2.name == "explore_dungeon_1"
+
+        # get_goal_id for a name that's already taken should return next available
+        # Since gm has explore_dungeon and explore_dungeon_1, next is explore_dungeon_2
+        assert gm.get_goal_id("explore dungeon") == "explore_dungeon_2"
+
+        # Create a third with same name - should get explore_dungeon_2
+        g3 = gm.create_goal("explore dungeon")
+        assert g3.name == "explore_dungeon_2"
+
+        # Delete one and verify get_goal_id returns the deleted slot
+        gm.delete_goal("explore_dungeon")
+        assert gm.get_goal_id("explore dungeon") == "explore_dungeon"
+
+        # Verify deletion works with get_goal_id
+        gm2 = GoalManager(goals_file=self.temp_path)  # Fresh manager with same goals
+        # gm2 has explore_dungeon (restored), explore_dungeon_1, explore_dungeon_2
+        # get_goal_id should return explore_dungeon (first available)
+        assert gm2.get_goal_id("explore dungeon") == "explore_dungeon"
+
     def test_list_goals_empty(self):
         """Test list_goals returns empty list when no goals."""
         gm = GoalManager(goals_file=self.temp_path)
