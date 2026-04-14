@@ -465,55 +465,6 @@ What do you want to do next? Respond with ONLY the command, nothing else.""")
 
         return None
 
-        recent = self.recent_agent_decisions[-1]
-        agent_cmd = recent["command"].lower()
-        user_cmd = user_command.lower()
-
-        # Extract action verbs
-        agent_verb = agent_cmd.split()[0] if agent_cmd else ""
-        user_verb = user_cmd.split()[0] if user_cmd else ""
-
-        # Same action category but different target = potential override
-        if agent_verb in ("get", "pick", "take") and user_verb in ("drop", "discard"):
-            return {
-                "agent_command": recent["command"],
-                "user_command": user_command,
-                "divergence_type": "undo_action",
-            }
-
-        if agent_verb in ("north", "south", "east", "west") or agent_cmd in (
-            "n",
-            "s",
-            "e",
-            "w",
-        ):
-            opposite_dirs = {
-                "north": "south",
-                "south": "north",
-                "east": "west",
-                "west": "east",
-                "n": "s",
-                "s": "n",
-                "e": "w",
-                "w": "e",
-            }
-            if user_cmd in opposite_dirs and user_cmd != agent_cmd:
-                return {
-                    "agent_command": recent["command"],
-                    "user_command": user_command,
-                    "divergence_type": "change_direction",
-                }
-
-        # Same action verb, different target
-        if agent_verb == user_verb and recent["command"] != user_command:
-            return {
-                "agent_command": recent["command"],
-                "user_command": user_command,
-                "divergence_type": "different_target",
-            }
-
-        return None
-
     def _infer_category_from_action(self, action: str) -> PreferenceCategory:
         """Infer preference category from action text."""
         action_lower = action.lower()
