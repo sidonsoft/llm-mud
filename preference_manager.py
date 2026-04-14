@@ -1,6 +1,9 @@
 """Preference learning with Bayesian confidence scoring and persistence."""
 
+import hashlib
 import json
+import os
+import tempfile
 import time
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
@@ -32,7 +35,9 @@ class Preference:
     def __post_init__(self):
         """Generate ID from category and rule hash."""
         if not self.id:
-            rule_hash = hash(self.rule) % 100000
+            rule_hash = hashlib.sha256(
+                f"{self.category.value}:{self.rule}".encode()
+            ).hexdigest()[:10]
             self.id = f"{self.category.value}_{rule_hash}"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -114,7 +119,7 @@ class PreferenceManager:
 
     def _generate_id(self, category: PreferenceCategory, rule: str) -> str:
         """Generate stable ID from category and rule hash."""
-        rule_hash = hash(rule) % 100000
+        rule_hash = hashlib.sha256(f"{category.value}:{rule}".encode()).hexdigest()[:10]
         return f"{category.value}_{rule_hash}"
 
     def create_preference(
@@ -228,21 +233,27 @@ class PreferenceManager:
     ) -> Optional[Preference]:
         """Find preference by category with similar rule to action text."""
         action_lower = action.lower()
+        stop_words = {"the", "a", "an", "to", "in", "on", "at", "up"}
+        action_words = set(action_lower.split()) - stop_words
         for pref in self.preferences.values():
             if pref.category == category:
-                rule_words = set(pref.rule.lower().split())
-                action_words = set(action_lower.split())
-                # Check for any word overlap
-                if rule_words & action_words:
+                rule_words = set(pref.rule.lower().split()) - stop_words
+                # Require minimum word length to avoid substring matches
+                meaningful_overlap = {
+                    w for w in rule_words & action_words if len(w) >= 3
+                }
+                if meaningful_overlap:
                     return pref
         return None
 
     def save_preferences(self) -> None:
-        """Write all preferences to JSON file, pruning stale."""
+        """Write all preferences to JSON file atomically, pruning stale."""
         self.prune_stale()
 
-        with open(self.preferences_file, "w") as f:
+        temp_path = self.preferences_file + ".tmp"
+        with open(temp_path, "w") as f:
             json.dump([p.to_dict() for p in self.preferences.values()], f, indent=2)
+        os.replace(temp_path, self.preferences_file)
 
     def load_preferences(self) -> None:
         """Load preferences from JSON file, creating empty file if not exists."""
