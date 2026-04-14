@@ -333,8 +333,23 @@ class MUDClient:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            return  # No running loop, skip broadcast
+            import logging
+
+            logging.warning("[Warning] No running event loop for preference broadcast")
+            return
         loop.create_task(self._broadcast_preference_update())
+
+    def set_override_callback(self, callback) -> None:
+        """Set callback to invoke when user sends command that might override agent."""
+        self._override_callback = callback
+
+    async def _notify_override(self, user_command: str) -> None:
+        """Notify connected LLMAgent of potential user override.
+
+        Called when user sends a command that might override agent decision.
+        """
+        if hasattr(self, "_override_callback") and self._override_callback:
+            await self._override_callback(user_command)
 
     async def _broadcast_preference_update(self) -> None:
         """Broadcast preference update to all WebSocket clients."""
@@ -450,6 +465,12 @@ class MUDClient:
 
                     if msg_type == "command":
                         command = data.get("command", "")
+                        # Check for potential override
+                        if (
+                            hasattr(self, "_override_callback")
+                            and self._override_callback
+                        ):
+                            asyncio.create_task(self._notify_override(command))
                         await self.send(command)
                     elif msg_type == "connect":
                         host = data.get("host")
