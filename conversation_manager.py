@@ -69,6 +69,7 @@ class Conversation:
     last_topic: str = ""
     pause_reason: str = ""
     resume_count: int = 0
+    topic_history: List[Tuple[str, float]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert conversation to dict for JSON serialization."""
@@ -82,6 +83,7 @@ class Conversation:
             "last_topic": self.last_topic,
             "pause_reason": self.pause_reason,
             "resume_count": self.resume_count,
+            "topic_history": self.topic_history,
         }
 
     @classmethod
@@ -97,6 +99,7 @@ class Conversation:
             last_topic=d.get("last_topic", ""),
             pause_reason=d.get("pause_reason", ""),
             resume_count=d.get("resume_count", 0),
+            topic_history=d.get("topic_history", []),
         )
 
 
@@ -168,10 +171,12 @@ class ConversationManager:
             existing.status = ConversationStatus.ACTIVE
             existing.resume_count += 1
             existing.last_activity = time.time()
+            self.save_conversations()
             self._trigger_callback()
             return existing
 
         conversation = Conversation(npc_name=npc_name, topic=topic)
+        conversation.topic_history = [(topic, time.time())]
         self.conversations[npc_name] = conversation
         self._topic_history[npc_name] = [(topic, time.time())]
         self.save_conversations()
@@ -258,6 +263,8 @@ class ConversationManager:
             if npc_name not in self._topic_history:
                 self._topic_history[npc_name] = []
             self._topic_history[npc_name].append((topic, time.time()))
+            # Also persist in conversation for serialization
+            conversation.topic_history.append((topic, time.time()))
 
         conversation.last_activity = time.time()
         self.save_conversations()
@@ -550,21 +557,27 @@ Respond with ONLY the category name, nothing else."""
         if "?" in text:
             return DialogActType.QUESTION
 
-        # Check for command keywords
+        # Check for command keywords - require more specific patterns
         command_keywords = [
-            "go",
-            "get",
-            "bring",
-            "kill",
-            "find",
-            "do",
-            "must",
-            "should",
-            "take",
-            "give",
-            "need",
+            r"\bgo\b",
+            r"\bget\b",
+            r"\bmust\b",
+            r"\bshould\b",
         ]
-        if any(kw in text_lower for kw in command_keywords):
+        command_patterns = [
+            r"\bgo\s+(north|south|east|west|up|down)\b",  # Direction commands
+            r"\bkill\b.*\bwith\b",  # Kill commands
+            r"\bbring\b.*\bto\b",  # Bring commands
+            r"\bget\b.*\bfrom\b",  # Get commands with source
+        ]
+        # Require either specific command structure or imperative mood
+        if any(re.search(p, text_lower) for p in command_patterns):
+            return DialogActType.COMMAND
+        # Only classify as command if starts with imperative verb at sentence start
+        imperative_patterns = [
+            r"^(?:go|get|bring|kill|find|do|must|should|need|take|give)\s+",
+        ]
+        if any(re.search(p, text_lower) for p in imperative_patterns):
             return DialogActType.COMMAND
 
         return DialogActType.STATEMENT
@@ -770,8 +783,12 @@ If no clear outcome, just describe what was discussed."""
             self._topic_history = {}
             for npc_name, conv in self.conversations.items():
                 if conv.turns:
-                    topics = [(conv.topic, conv.started_at)]
-                    self._topic_history[npc_name] = topics
+                    # Use stored topic_history if available, otherwise create from current topic
+                    if conv.topic_history:
+                        self._topic_history[npc_name] = conv.topic_history
+                    else:
+                        topics = [(conv.topic, conv.started_at)]
+                        self._topic_history[npc_name] = topics
 
         except FileNotFoundError:
             # Create empty conversations file
