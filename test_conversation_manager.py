@@ -1,5 +1,6 @@
 """Unit tests for ConversationManager."""
 
+import asyncio
 import unittest
 import tempfile
 import os
@@ -625,6 +626,84 @@ class TestConversationContext(unittest.TestCase):
         # With 3 turns, recent(2) returns turns[-2:] which are "Hi!" and "What do you need?"
         assert recent[0].text == "Hi!"
         assert recent[1].text == "What do you need?"
+
+
+class TestAddTurnAsync(unittest.IsolatedAsyncioTestCase):
+    """Tests for add_turn_async method."""
+
+    def setUp(self):
+        """Create ConversationManager with test data."""
+        self.temp_file = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self.temp_path = self.temp_file.name
+        self.temp_file.close()
+
+    def tearDown(self):
+        """Clean up temp file."""
+        try:
+            os.unlink(self.temp_path)
+        except FileNotFoundError:
+            pass
+
+    async def test_add_turn_async_classifies_npc_dialogue(self):
+        """Test add_turn_async classifies NPC dialogue using mock provider."""
+
+        # Create mock provider that returns QUESTION
+        class MockProvider:
+            async def chat(self, messages):
+                return "question"
+
+        cm = ConversationManager(
+            conversations_file=self.temp_path, provider=MockProvider()
+        )
+        cm.start_conversation("Innkeeper", "room rental")
+
+        # Should classify as QUESTION based on LLM response
+        result = await cm.add_turn_async("Innkeeper", "npc", "How are you?")
+        assert result is True
+        # Verify turn was added with classified act
+        conv = cm.get_conversation("Innkeeper")
+        assert len(conv.turns) == 1
+        assert conv.turns[0].act == DialogActType.QUESTION
+
+    async def test_add_turn_async_skips_classification_for_agent(self):
+        """Test add_turn_async skips LLM classification for agent messages."""
+
+        class MockProvider:
+            async def chat(self, messages):
+                return "should_not_be_used"
+
+        cm = ConversationManager(
+            conversations_file=self.temp_path, provider=MockProvider()
+        )
+        cm.start_conversation("Innkeeper", "room rental")
+
+        # Agent messages should not trigger LLM classification
+        result = await cm.add_turn_async("Innkeeper", "agent", "I need a room")
+        assert result is True
+        # Verify turn was added with default STATEMENT act
+        conv = cm.get_conversation("Innkeeper")
+        assert len(conv.turns) == 1
+        assert conv.turns[0].act == DialogActType.STATEMENT
+
+    async def test_add_turn_async_with_provided_act(self):
+        """Test add_turn_async uses provided act instead of classifying."""
+
+        class MockProvider:
+            async def chat(self, messages):
+                return "should_not_be_used"
+
+        cm = ConversationManager(
+            conversations_file=self.temp_path, provider=MockProvider()
+        )
+        cm.start_conversation("Innkeeper", "room rental")
+
+        # Provide explicit act
+        result = await cm.add_turn_async(
+            "Innkeeper", "npc", "Hello!", act=DialogActType.GREETING
+        )
+        assert result is True
+        conv = cm.get_conversation("Innkeeper")
+        assert conv.turns[0].act == DialogActType.GREETING
 
 
 if __name__ == "__main__":
