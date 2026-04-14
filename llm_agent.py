@@ -520,7 +520,7 @@ What do you want to do next? Respond with ONLY the command, nothing else.""")
 
         loot_keywords = ["get", "pick up", "loot", "take", "drop", "gold"]
         equip_keywords = ["wield", "wear", "equip", "armor", "weapon"]
-        move_keywords = ["north", "south", "east", "west"]
+        move_keywords = ["north", "south", "east", "west", "enter", "exit"]
         conversation_keywords = ["say", "talk", "ask", "tell", "npc", "quest"]
 
         # Use regex for word boundary matching
