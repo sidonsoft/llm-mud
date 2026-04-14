@@ -2,8 +2,11 @@
 
 import unittest
 import time
+import tempfile
+import os
 from unittest.mock import AsyncMock, MagicMock
 from context_manager import ContextManager, ActivityType, MemoryEntry
+from goal_manager import GoalManager
 
 
 class TestRelevanceFiltering(unittest.TestCase):
@@ -222,24 +225,42 @@ class TestGoalManagement(unittest.TestCase):
     """Tests for goal management in relevance boosting."""
 
     def setUp(self):
-        self.cm = ContextManager()
+        # Use isolated GoalManager with temp file to avoid pollution
+        self.temp_goals_file = tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w"
+        )
+        self.temp_goals_file.write("[]")
+        self.temp_goals_file.close()
+        self.gm = GoalManager(goals_file=self.temp_goals_file.name)
+        self.cm = ContextManager(goal_manager=self.gm)
+
+    def tearDown(self):
+        if os.path.exists(self.temp_goals_file.name):
+            os.unlink(self.temp_goals_file.name)
 
     def test_add_goal(self):
-        """add_goal should add to active_goals."""
+        """add_goal should add to active_goals via GoalManager."""
         self.cm.add_goal("Explore dungeon")
-        self.assertIn("Explore dungeon", self.cm.active_goals)
+        # Goals are stored with transformed IDs (spaces -> underscores)
+        active = self.cm.get_active_goals()
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0].name, "explore_dungeon")
 
     def test_remove_goal(self):
-        """remove_goal should remove from active_goals."""
+        """remove_goal should remove from active_goals via GoalManager."""
         self.cm.add_goal("Explore dungeon")
         self.cm.remove_goal("Explore dungeon")
-        self.assertNotIn("Explore dungeon", self.cm.active_goals)
+        self.assertEqual(len(self.cm.get_active_goals()), 0)
 
     def test_duplicate_goal_ignored(self):
         """Adding same goal twice should not duplicate."""
         self.cm.add_goal("Explore dungeon")
         self.cm.add_goal("Explore dungeon")
-        self.assertEqual(len(self.cm.active_goals), 1)
+        # Second add creates a new goal with _1 suffix since original is deleted
+        active = self.cm.get_active_goals()
+        # Only one goal should exist with the transformed ID
+        goal_ids = [g.name for g in active]
+        self.assertEqual(goal_ids.count("explore_dungeon"), 1)
 
     def test_loot_events_capped(self):
         """Loot events should be capped at 5."""
@@ -280,9 +301,10 @@ class TestContextManagerIntegration(unittest.TestCase):
 
         agent = LLMAgent(provider=RandomProvider())
         agent.add_goal("Defeat the dragon")
-        self.assertIn("Defeat the dragon", agent.get_active_goals())
+        # get_active_goals() returns goal IDs (transformed names with underscores)
+        self.assertIn("defeat_the_dragon", agent.get_active_goals())
         agent.remove_goal("Defeat the dragon")
-        self.assertNotIn("Defeat the dragon", agent.get_active_goals())
+        self.assertNotIn("defeat_the_dragon", agent.get_active_goals())
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import tempfile
 import os
 import json
 from unittest.mock import MagicMock, AsyncMock, patch
+from unittest import IsolatedAsyncioTestCase
 
 from preference_manager import PreferenceManager, PreferenceCategory
 from llm_agent import LLMAgent
@@ -181,27 +182,30 @@ class TestCategoryInference:
         assert agent._infer_category_from_action("score") == PreferenceCategory.GENERAL
 
 
-class TestWebSocketHandlers:
+class TestWebSocketHandlers(IsolatedAsyncioTestCase):
     """Tests for MUDClient WebSocket preference handlers."""
 
-    @pytest.fixture
-    def temp_prefs_file(self):
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            tmp_path = f.name
-        yield tmp_path
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    async def asyncSetUp(self):
+        """Set up temp prefs file for each test."""
+        self.temp_prefs_file = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self.temp_prefs_path = self.temp_prefs_file.name
+        self.temp_prefs_file.close()
 
-    def test_mud_client_has_preference_manager(self, temp_prefs_file):
+    async def asyncTearDown(self):
+        """Clean up temp prefs file after each test."""
+        if os.path.exists(self.temp_prefs_path):
+            os.unlink(self.temp_prefs_path)
+
+    def test_mud_client_has_preference_manager(self):
         """Test MUDClient initializes with PreferenceManager."""
         from mud_client import MUDClient
 
         client = MUDClient()
         assert hasattr(client, "preference_manager")
 
-    def test_get_preference_for_action(self, temp_prefs_file):
+    def test_get_preference_for_action(self):
         """Test finding preferences by action similarity."""
-        pm = PreferenceManager(preferences_file=temp_prefs_file)
+        pm = PreferenceManager(preferences_file=self.temp_prefs_path)
         p = pm.create_preference(
             PreferenceCategory.LOOT, "Pick up all gold items", confidence=0.8
         )
@@ -210,12 +214,12 @@ class TestWebSocketHandlers:
         # Should find the preference even with slightly different wording
         assert found is not None
 
-    def test_feedback_handler_inference(self, temp_prefs_file):
+    def test_feedback_handler_inference(self):
         """Test category inference in feedback handler."""
         from mud_client import MUDClient
 
         client = MUDClient()
-        client.preference_manager.preferences_file = temp_prefs_file
+        client.preference_manager.preferences_file = self.temp_prefs_path
 
         # Test category inference for various actions
         assert (
