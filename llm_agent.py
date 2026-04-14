@@ -845,12 +845,15 @@ Respond with ONLY the preference rule, nothing else."""
                         self.last_command = command
                         # Track agent decision for conversation
                         if self.conversation_manager:
-                            # If we have an active conversation, add agent's turn
-                            for (
-                                conv
-                            ) in self.conversation_manager.get_active_conversations():
+                            # Only add turn to the active conversation, not all
+                            # For now, add to first active conversation or skip
+                            active_convs = (
+                                self.conversation_manager.get_active_conversations()
+                            )
+                            if active_convs:
+                                # Consider tracking which NPC the command was for
                                 self.conversation_manager.add_turn(
-                                    conv.npc_name, "agent", command
+                                    active_convs[0].npc_name, "agent", command
                                 )
                         await self.send_command(command)
                         await asyncio.sleep(1.0)
