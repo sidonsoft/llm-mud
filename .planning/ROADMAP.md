@@ -27,7 +27,12 @@
   3. Context automatically compacts when threshold exceeded, preserving goals/preferences/key events
   4. User can configure token budgets per activity (combat, exploration, conversation)
   5. Rolling summaries update without losing important details (verified against ground truth)
-**Plans:** TBD
+**Plans:** 4 plans
+Plans:
+- [ ] 06-PLAN-01-context-module.md — Context management module with relevance filtering and memory split
+- [ ] 06-PLAN-02-compaction.md — Compaction system with LLM-generated summaries
+- [ ] 06-PLAN-03-budget-config.md — Token budget configuration and enforcement
+- [ ] 06-PLAN-04-tests.md — Unit tests for context management
 
 ### Phase 7: Goal-Directed Behavior
 **Goal:** Agent pursues user-defined goals with autonomous subgoal decomposition
@@ -39,8 +44,13 @@
   3. User can view progress toward goals with measurable milestones
   4. System detects and reports goal completion or failure
   5. Goals persist across sessions and agent prioritizes actions based on active goals
-**Plans:** TBD
-**UI hint**: yes
+**Plans:** 5 plans
+Plans:
+- [ ] 07-01-PLAN.md — Goal model and manager with CRUD and persistence
+- [ ] 07-02-PLAN.md — WebSocket set_goal handler and goal_update broadcasts
+- [ ] 07-03-PLAN.md — LLM subgoal decomposition and goal-aware prompts
+- [ ] 07-04-PLAN.md — Progress evaluation and completion/failure detection
+- [ ] 07-05-PLAN.md — Unit and integration tests
 
 ### Phase 8: Preference Learning
 **Goal:** Agent learns and applies user preferences from decisions and corrections
@@ -52,7 +62,13 @@
   3. Learned preferences display confidence scores based on frequency/consistency
   4. User can view preference summary ("Agent knows you prefer: ...")
   5. Preferences persist across sessions and influence future similar decisions
-**Plans:** TBD
+**Plans:** 5 plans
+Plans:
+- [ ] 08-01-PLAN.md — PreferenceManager core with Preference dataclass, CRUD, Bayesian confidence, JSON persistence
+- [ ] 08-02-PLAN.md — WebSocket handlers for feedback, get_preferences, clear_preference
+- [ ] 08-03-PLAN.md — Implicit learning with override detection in play_loop, LLM-inferred preferences
+- [ ] 08-04-PLAN.md — Prompt integration with preferences injected into build_prompt()
+- [ ] 08-05-PLAN.md — Unit and integration tests
 **UI hint**: yes
 
 ### Phase 9: Multi-Turn Conversations
@@ -74,9 +90,9 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 6. Context Management | 0/0 | Not started | - |
-| 7. Goal-Directed Behavior | 0/0 | Not started | - |
-| 8. Preference Learning | 0/0 | Not started | - |
+| 6. Context Management | 0/4 | Planning complete | - |
+| 7. Goal-Directed Behavior | 0/5 | Planning complete | - |
+| 8. Preference Learning | 0/5 | Planning complete | - |
 | 9. Multi-Turn Conversations | 0/0 | Not started | - |
 
 ---
