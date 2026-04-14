@@ -7,6 +7,7 @@ from llm_providers import LLMProvider, create_provider
 from context_manager import ContextManager, ActivityType, MemoryEntry
 from goal_manager import GoalManager
 from preference_manager import PreferenceManager, PreferenceCategory
+from conversation_manager import ConversationManager, DialogActType, ConversationStatus
 
 
 class LLMAgent:
@@ -48,6 +49,11 @@ class LLMAgent:
         self.context_manager = ContextManager(working_memory_size=working_memory_size)
         if self.goal_manager:
             self.context_manager.goal_manager = self.goal_manager
+
+        # Conversation management - wire to context_manager for long-term memory
+        self.conversation_manager = ConversationManager(
+            provider=self.provider, context_manager=self.context_manager
+        )
         self.current_activity = ActivityType.IDLE
         self.token_budget = 4000
         self.current_token_estimate = 0
@@ -293,6 +299,9 @@ class LLMAgent:
         # Get preference context
         preference_context = self._format_preference_context()
 
+        # Get conversation context
+        conversation_context = self._get_conversation_context()
+
         prompt_parts = [
             f"""Current state:
 Room: {self.current_room}
@@ -301,6 +310,10 @@ Exits: {", ".join(self.exits) if self.exits else "unknown"}
 {memory_context}
 {goal_context}"""
         ]
+
+        # Insert conversation context if active
+        if conversation_context:
+            prompt_parts.insert(-2, conversation_context + "\n")
 
         # Insert preference constraints if available
         if preference_context:
@@ -375,6 +388,90 @@ What do you want to do next? Respond with ONLY the command, nothing else.""")
             )
 
         return "\n".join(lines) + "\n"
+
+    def _get_conversation_context(self) -> str:
+        """Get conversation context for active conversations.
+
+        Returns:
+            String describing currently active conversations and recent turns
+        """
+        if not self.conversation_manager:
+            return ""
+
+        active = self.conversation_manager.get_active_conversations()
+        if not active:
+            return ""
+
+        lines = []
+        for conv in active:
+            # Get last 3 turns
+            recent_turns = conv.turns[-3:] if conv.turns else []
+            turns_desc = ", ".join(
+                f"{t.speaker}: {t.text[:40]}{'...' if len(t.text) > 40 else ''}"
+                for t in recent_turns
+            )
+            lines.append(
+                f"Currently talking to {conv.npc_name} about {conv.topic}: {turns_desc}"
+            )
+
+        return "\n".join(lines)
+
+    async def _handle_conversation_turns(self, plain_text: str) -> None:
+        """Handle NPC conversation turns from game output.
+
+        Detects NPC messages and adds them to active conversations,
+        or starts new conversations if we don't have one with this NPC.
+        """
+        if not self.conversation_manager:
+            return
+
+        # Detect NPC message in the text
+        result = self.conversation_manager._detect_npc_message(plain_text)
+        if result:
+            npc_name, spoken_text = result
+
+            # Check if we have an active conversation with this NPC
+            conv = self.conversation_manager.get_conversation(npc_name)
+
+            if not conv:
+                # Start new conversation with generic topic
+                conv = self.conversation_manager.start_conversation(npc_name, "general")
+
+            # Add the NPC's turn to the conversation
+            await self.conversation_manager.add_turn_async(npc_name, "npc", spoken_text)
+
+            # Update activity timestamp
+            conv.last_activity = time.time()
+
+    async def _check_conversation_completion(self) -> None:
+        """Check if any conversations should be completed.
+
+        Triggers completion on:
+        - Farewell dialogue act detected
+        - Idle timeout (5 minutes of inactivity)
+        """
+        if not self.conversation_manager:
+            return
+
+        # Check each active conversation
+        for conv in list(self.conversation_manager.get_active_conversations()):
+            # Check for farewell
+            if self.conversation_manager.detect_farewell(conv.npc_name):
+                summary = await self.conversation_manager.complete_conversation_async(
+                    conv.npc_name, self._get_game_state_summary()
+                )
+                if summary:
+                    print(f"[Conversation] {summary}")
+                continue
+
+            # Check for idle timeout
+            expired = self.conversation_manager._check_idle_expiry()
+            for npc_name in expired:
+                summary = await self.conversation_manager.complete_conversation_async(
+                    npc_name, self._get_game_state_summary()
+                )
+                if summary:
+                    print(f"[Conversation] {summary}")
 
     def _track_agent_decision(self, command: str) -> None:
         """Track agent command for override detection.
@@ -733,6 +830,9 @@ Respond with ONLY the preference rule, nothing else."""
                     self.exits = []
                     self.parse_room(plain_text)
 
+                    # Handle NPC conversation detection and updates
+                    await self._handle_conversation_turns(plain_text)
+
                     # Check if any active goal needs subgoals
                     await self.check_and_generate_subgoals(
                         self._get_game_state_summary()
@@ -743,11 +843,23 @@ Respond with ONLY the preference rule, nothing else."""
 
                     if command:
                         self.last_command = command
+                        # Track agent decision for conversation
+                        if self.conversation_manager:
+                            # If we have an active conversation, add agent's turn
+                            for (
+                                conv
+                            ) in self.conversation_manager.get_active_conversations():
+                                self.conversation_manager.add_turn(
+                                    conv.npc_name, "agent", command
+                                )
                         await self.send_command(command)
                         await asyncio.sleep(1.0)
 
                 # Check goal completion after each cycle
                 await self.check_goal_completion(output_data)
+
+                # Check conversation completion (farewell or idle timeout)
+                await self._check_conversation_completion()
 
             except asyncio.TimeoutError:
                 continue

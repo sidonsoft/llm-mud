@@ -11,6 +11,7 @@ import time
 from inventory import InventoryManager, InventoryParser
 from goal_manager import GoalManager, Goal, GoalStatus
 from preference_manager import PreferenceManager, PreferenceCategory
+from conversation_manager import ConversationManager
 
 
 @dataclass
@@ -60,6 +61,10 @@ class MUDClient:
         self.preference_manager = PreferenceManager()
         self.preference_manager.set_on_change_callback(self._on_preference_change)
         self._override_callback = None
+
+        # Conversation management
+        self.conversation_manager = ConversationManager()
+        self.conversation_manager.set_on_change_callback(self._on_conversation_change)
 
     def strip_ansi(self, text: str) -> str:
         ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -368,6 +373,34 @@ class MUDClient:
                 return_exceptions=True,
             )
 
+    def _on_conversation_change(self) -> None:
+        """Handle conversation state changes - triggers broadcast."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            import logging
+
+            logging.warning(
+                "[Warning] No running event loop for conversation broadcast"
+            )
+            return
+        loop.create_task(self._broadcast_conversation_update())
+
+    async def _broadcast_conversation_update(self) -> None:
+        """Broadcast conversation update to all WebSocket clients."""
+        if self.websocket_clients:
+            conversations = self.conversation_manager.list_conversations()
+            message = json.dumps(
+                {
+                    "type": "conversation_update",
+                    "conversations": [c.to_dict() for c in conversations],
+                }
+            )
+            await asyncio.gather(
+                *[ws.send(message) for ws in self.websocket_clients],
+                return_exceptions=True,
+            )
+
     async def _handle_set_goal(self, data: Dict[str, Any], websocket) -> None:
         """Handle set_goal command from WebSocket client."""
         name = data.get("name", "")
@@ -560,6 +593,24 @@ class MUDClient:
                         await self._handle_get_preferences(data, websocket)
                     elif msg_type == "clear_preference":
                         await self._handle_clear_preference(data, websocket)
+                    elif msg_type == "get_conversations":
+                        conversations = self.conversation_manager.list_conversations()
+                        # Return active and paused, exclude completed
+                        active_and_paused = [
+                            c
+                            for c in conversations
+                            if c.status.value in ("active", "paused")
+                        ]
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "type": "conversations_response",
+                                    "conversations": [
+                                        c.to_dict() for c in active_and_paused
+                                    ],
+                                }
+                            )
+                        )
 
                 except json.JSONDecodeError:
                     await self.send(message)
