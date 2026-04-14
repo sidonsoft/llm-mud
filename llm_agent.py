@@ -290,19 +290,30 @@ class LLMAgent:
         # Get goal context
         goal_context = self._format_goal_context()
 
-        prompt = f"""Current state:
+        # Get preference context
+        preference_context = self._format_preference_context()
+
+        prompt_parts = [
+            f"""Current state:
 Room: {self.current_room}
 Exits: {", ".join(self.exits) if self.exits else "unknown"}
 {inventory_summary}
 {memory_context}
-{goal_context}
-Last output:
+{goal_context}"""
+        ]
+
+        # Insert preference constraints if available
+        if preference_context:
+            prompt_parts.append(preference_context)
+
+        prompt_parts.append(f"""Last output:
 {output}
 
 Available commands: north, south, east, west, up, down, look, inventory, get [item], drop [item], kill [target], say [message]
 
-What do you want to do next? Respond with ONLY the command, nothing else."""
-        return prompt
+What do you want to do next? Respond with ONLY the command, nothing else.""")
+
+        return "\n".join(prompt_parts)
 
     def _format_memory_context(self, filtered_memory: List[MemoryEntry]) -> str:
         """Format filtered memory entries for the prompt."""
@@ -331,6 +342,37 @@ What do you want to do next? Respond with ONLY the command, nothing else."""
                 lines.append(f"  Progress: {progress[0]}/{progress[1]}")
             if active_subgoal:
                 lines.append(f"  Current: {active_subgoal}")
+
+        return "\n".join(lines) + "\n"
+
+    def _format_preference_context(self) -> str:
+        """Format learned preferences for LLM context injection.
+
+        Returns constraint section: "Based on your preferences: ..."
+        Only includes preferences with confidence > 0.5 (established preferences).
+        """
+        if not self.preference_manager:
+            return ""
+
+        prefs = self.preference_manager.list_preferences()
+
+        # Filter to established preferences (confidence >= 0.5)
+        established = [p for p in prefs if p.confidence >= 0.5]
+
+        if not established:
+            return ""
+
+        # Sort by confidence descending
+        established.sort(key=lambda p: p.confidence, reverse=True)
+
+        lines = ["Based on your preferences:"]
+        for pref in established[:5]:  # Limit to top 5 most confident
+            conf_pct = int(pref.confidence * 100)
+            evidence = pref.evidence_count
+            examples_str = "example" if evidence == 1 else "examples"
+            lines.append(
+                f"- {pref.rule} (confidence: {conf_pct}%, {evidence} {examples_str})"
+            )
 
         return "\n".join(lines) + "\n"
 
