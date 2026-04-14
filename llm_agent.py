@@ -40,6 +40,10 @@ class LLMAgent:
         self.goal_manager = goal_manager
         # Preference learning
         self.preference_manager = preference_manager
+        # Preference learning state
+        self.recent_agent_decisions: List[Dict[str, Any]] = []
+        self.max_decision_history = 10
+        self._override_callback = None
         # Context management
         self.context_manager = ContextManager(working_memory_size=working_memory_size)
         if self.goal_manager:
@@ -330,6 +334,240 @@ What do you want to do next? Respond with ONLY the command, nothing else."""
 
         return "\n".join(lines) + "\n"
 
+    def _track_agent_decision(self, command: str) -> None:
+        """Track agent command for override detection.
+
+        Stores: {command, timestamp, room}
+        """
+        decision = {
+            "command": command,
+            "timestamp": time.time(),
+            "room": self.current_room,
+        }
+        self.recent_agent_decisions.append(decision)
+        # Keep only recent decisions
+        if len(self.recent_agent_decisions) > self.max_decision_history:
+            self.recent_agent_decisions.pop(0)
+
+    def _detect_override(self, user_command: str) -> Optional[Dict[str, Any]]:
+        """Detect if user is overriding a recent agent decision.
+
+        Returns: {agent_command, user_command, divergence_type} if override detected, None otherwise.
+
+        Override detection heuristics:
+        - User command is opposite or replacement of recent agent action
+        - Examples: agent says "get sword" but user types "drop sword"
+                    agent says "go north" but user types "go south"
+        """
+        if not self.recent_agent_decisions:
+            return None
+
+        recent = self.recent_agent_decisions[-1]
+        agent_cmd = recent["command"].lower()
+        user_cmd = user_command.lower()
+
+        # Extract action verbs and targets
+        agent_parts = agent_cmd.split()
+        user_parts = user_cmd.split()
+        agent_verb = agent_parts[0] if agent_parts else ""
+        user_verb = user_parts[0] if user_parts else ""
+        agent_target = agent_parts[1] if len(agent_parts) > 1 else ""
+        user_target = user_parts[1] if len(user_parts) > 1 else ""
+
+        # Direction keywords
+        directions = {"north", "south", "east", "west", "n", "s", "e", "w"}
+        opposite_dirs = {
+            "north": "south",
+            "south": "north",
+            "east": "west",
+            "west": "east",
+            "n": "s",
+            "s": "n",
+            "e": "w",
+            "w": "e",
+        }
+
+        # Check for direction change override
+        if agent_target in directions and user_target in directions:
+            if user_target in opposite_dirs and user_target != agent_target:
+                return {
+                    "agent_command": recent["command"],
+                    "user_command": user_command,
+                    "divergence_type": "change_direction",
+                }
+
+        # Check for direction change with shorthand commands
+        if agent_cmd in directions and user_cmd in directions:
+            if user_cmd in opposite_dirs and user_cmd != agent_cmd:
+                return {
+                    "agent_command": recent["command"],
+                    "user_command": user_command,
+                    "divergence_type": "change_direction",
+                }
+
+        # Same action category but different target = potential override (undo action)
+        if agent_verb in ("get", "pick", "take") and user_verb in ("drop", "discard"):
+            return {
+                "agent_command": recent["command"],
+                "user_command": user_command,
+                "divergence_type": "undo_action",
+            }
+
+        # Same action verb, different target
+        if agent_verb == user_verb and recent["command"] != user_command:
+            return {
+                "agent_command": recent["command"],
+                "user_command": user_command,
+                "divergence_type": "different_target",
+            }
+
+        return None
+
+        recent = self.recent_agent_decisions[-1]
+        agent_cmd = recent["command"].lower()
+        user_cmd = user_command.lower()
+
+        # Extract action verbs
+        agent_verb = agent_cmd.split()[0] if agent_cmd else ""
+        user_verb = user_cmd.split()[0] if user_cmd else ""
+
+        # Same action category but different target = potential override
+        if agent_verb in ("get", "pick", "take") and user_verb in ("drop", "discard"):
+            return {
+                "agent_command": recent["command"],
+                "user_command": user_command,
+                "divergence_type": "undo_action",
+            }
+
+        if agent_verb in ("north", "south", "east", "west") or agent_cmd in (
+            "n",
+            "s",
+            "e",
+            "w",
+        ):
+            opposite_dirs = {
+                "north": "south",
+                "south": "north",
+                "east": "west",
+                "west": "east",
+                "n": "s",
+                "s": "n",
+                "e": "w",
+                "w": "e",
+            }
+            if user_cmd in opposite_dirs and user_cmd != agent_cmd:
+                return {
+                    "agent_command": recent["command"],
+                    "user_command": user_command,
+                    "divergence_type": "change_direction",
+                }
+
+        # Same action verb, different target
+        if agent_verb == user_verb and recent["command"] != user_command:
+            return {
+                "agent_command": recent["command"],
+                "user_command": user_command,
+                "divergence_type": "different_target",
+            }
+
+        return None
+
+    def _infer_category_from_action(self, action: str) -> PreferenceCategory:
+        """Infer preference category from action text."""
+        action_lower = action.lower()
+
+        loot_keywords = ["get", "pick up", "loot", "take", "drop", "gold"]
+        equip_keywords = ["wield", "wear", "equip", "armor", "weapon"]
+        move_keywords = ["north", "south", "east", "west"]
+        conversation_keywords = ["say", "talk", "ask", "tell", "npc", "quest"]
+
+        # Use regex for word boundary matching
+        import re
+
+        def contains_word(text, word):
+            return bool(re.search(r"\b" + re.escape(word) + r"\b", text))
+
+        # Check direction shorthand
+        if re.search(r"\bn\b|\bs\b|\be\b|\bw\b", action_lower):
+            return PreferenceCategory.MOVEMENT
+        if any(contains_word(action_lower, kw) for kw in loot_keywords):
+            return PreferenceCategory.LOOT
+        if any(contains_word(action_lower, kw) for kw in equip_keywords):
+            return PreferenceCategory.EQUIPMENT
+        if any(contains_word(action_lower, kw) for kw in move_keywords):
+            return PreferenceCategory.MOVEMENT
+        if any(contains_word(action_lower, kw) for kw in conversation_keywords):
+            return PreferenceCategory.CONVERSATION
+
+        return PreferenceCategory.GENERAL
+
+    async def _infer_preference_from_override(
+        self, agent_cmd: str, user_cmd: str
+    ) -> Optional[str]:
+        """Use LLM to infer what preference the override indicates.
+
+        Returns: Natural language preference rule string.
+        """
+        if not self.provider:
+            return None
+
+        prompt = f"""Given the following agent decision and user override, infer the underlying user preference.
+
+Agent decided to: {agent_cmd}
+User instead did: {user_cmd}
+
+What is the user's likely preference here? Respond with a brief natural language rule (1 sentence) that explains why the user chose differently.
+Example: "Prefer to prioritize gold over equipment upgrades"
+Example: "Avoid going north - danger lurks there"
+
+Respond with ONLY the preference rule, nothing else."""
+
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful game preference inference assistant.",
+            },
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            response = await self.provider.chat(messages)
+            response = response.strip()
+            if response and len(response) < 200:
+                return response
+        except Exception as e:
+            print(f"[PreferenceLearning] Error inferring preference: {e}")
+
+        return None
+
+    async def _handle_override(self, override_info: Dict[str, Any]) -> None:
+        """Process detected override and infer preference via LLM.
+
+        Args:
+            override_info: {agent_command, user_command, divergence_type}
+        """
+        agent_cmd = override_info["agent_command"]
+        user_cmd = override_info["user_command"]
+
+        # Use LLM to infer what preference this indicates
+        inferred_preference = await self._infer_preference_from_override(
+            agent_cmd, user_cmd
+        )
+
+        if inferred_preference:
+            # Create preference with implicit feedback weight (0.5)
+            category = self._infer_category_from_action(user_cmd)
+            new_pref = self.preference_manager.create_preference(
+                category=category,
+                rule=inferred_preference,
+                confidence=0.4,  # Start lower for implicit
+            )
+            # Add evidence with lower weight (implicit)
+            self.preference_manager.add_evidence(new_pref.id, positive=True)
+            print(
+                f"[PreferenceLearning] Inferred preference from override: {inferred_preference}"
+            )
+
     async def get_llm_response(self, prompt: str) -> str:
         # Detect current activity
         self.current_activity = self._detect_activity(prompt)
@@ -480,6 +718,16 @@ What do you want to do next? Respond with ONLY the command, nothing else."""
                 await self.goal_manager.evaluate_progress(
                     goal.name, game_state, last_cmd
                 )
+
+    def register_with_mud_client(self, mud_client) -> None:
+        """Register override callback with MUDClient."""
+        mud_client.set_override_callback(self._handle_user_command_override)
+
+    async def _handle_user_command_override(self, user_command: str) -> None:
+        """Handle potential override detected by MUDClient."""
+        override_info = self._detect_override(user_command)
+        if override_info and self.preference_manager and self.provider:
+            await self._handle_override(override_info)
 
     async def play_loop(self, max_iterations: int = 100):
         self.last_command = ""
