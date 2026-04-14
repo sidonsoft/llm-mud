@@ -10,6 +10,7 @@ import time
 
 from inventory import InventoryManager, InventoryParser
 from goal_manager import GoalManager, Goal, GoalStatus
+from preference_manager import PreferenceManager, PreferenceCategory
 
 
 @dataclass
@@ -54,6 +55,11 @@ class MUDClient:
         # Goal management
         self.goal_manager = GoalManager()
         self.goal_manager.set_on_change_callback(self._on_goal_change)
+
+        # Preference learning
+        self.preference_manager = PreferenceManager()
+        self.preference_manager.set_on_change_callback(self._on_preference_change)
+        self._override_callback = None
 
     def strip_ansi(self, text: str) -> str:
         ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -152,6 +158,194 @@ class MUDClient:
                     "type": "goal_update",
                     "goals": [g.to_dict() for g in goals],
                     "active_subgoal": active_subgoal,
+                }
+            )
+            await asyncio.gather(
+                *[ws.send(message) for ws in self.websocket_clients],
+                return_exceptions=True,
+            )
+
+    def _infer_preference_category(self, action: str) -> PreferenceCategory:
+        """Infer preference category from action text."""
+        import re
+
+        action_lower = action.lower()
+
+        loot_keywords = ["get", "pick up", "loot", "take", "drop", "gold"]
+        equip_keywords = ["wield", "wear", "equip", "armor", "weapon"]
+        move_keywords = ["north", "south", "east", "west"]
+        conversation_keywords = ["say", "talk", "ask", "tell", "npc", "quest"]
+
+        # Use regex for word boundary matching
+        def contains_word(text, word):
+            return bool(re.search(r"\b" + re.escape(word) + r"\b", text))
+
+        # Check direction shorthand (single letters with word boundaries)
+        if re.search(r"\bn\b|\bs\b|\be\b|\bw\b", action_lower):
+            return PreferenceCategory.MOVEMENT
+        if any(contains_word(action_lower, kw) for kw in loot_keywords):
+            return PreferenceCategory.LOOT
+        if any(contains_word(action_lower, kw) for kw in equip_keywords):
+            return PreferenceCategory.EQUIPMENT
+        if any(contains_word(action_lower, kw) for kw in move_keywords):
+            return PreferenceCategory.MOVEMENT
+        if any(contains_word(action_lower, kw) for kw in conversation_keywords):
+            return PreferenceCategory.CONVERSATION
+
+        return PreferenceCategory.GENERAL
+
+    async def _handle_feedback(self, data: Dict[str, Any], websocket) -> None:
+        """Handle explicit feedback on agent decisions.
+
+        Expected format: {
+            "type": "feedback",
+            "action": "...",          # The agent action feedback relates to
+            "decision": "approve",    # "approve" or "correct"
+            "correction": "..."       # Optional free text correction (only on "correct")
+        }
+        """
+        action = data.get("action", "")
+        decision = data.get("decision", "")
+        correction = data.get("correction", "")
+
+        if not action:
+            await websocket.send(
+                json.dumps({"type": "error", "message": "Feedback action is required"})
+            )
+            return
+
+        if decision not in ("approve", "correct"):
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "message": "Decision must be 'approve' or 'correct'",
+                    }
+                )
+            )
+            return
+
+        # Determine category from action keywords
+        category = self._infer_preference_category(action)
+
+        # Create or update preference based on feedback
+        positive = decision == "approve"
+
+        # Find existing preference for this action or create new
+        existing = self.preference_manager.get_preference_for_action(category, action)
+
+        if existing:
+            # Update existing preference
+            self.preference_manager.add_evidence(existing.id, positive=positive)
+            # If correction provided, update the rule
+            if correction and decision == "correct":
+                existing.rule = correction
+                self.preference_manager.save_preferences()
+        else:
+            # Create new preference
+            rule = (
+                correction
+                if (correction and decision == "correct")
+                else f"Preference for: {action}"
+            )
+            new_pref = self.preference_manager.create_preference(
+                category=category, rule=rule, confidence=0.6 if positive else 0.4
+            )
+            self.preference_manager.add_evidence(new_pref.id, positive=positive)
+
+        # Broadcast update to all clients
+        await self._broadcast_preference_update()
+
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "feedback_acknowledged",
+                    "action": action,
+                    "decision": decision,
+                }
+            )
+        )
+
+    async def _handle_get_preferences(self, data: Dict[str, Any], websocket) -> None:
+        """Handle get_preferences command - return formatted preference summary.
+
+        Response format: {
+            "type": "preferences_response",
+            "preferences": [...],  # List of preference dicts
+            "summary": "Agent knows you prefer: ..."  # Natural language
+        }
+        """
+        category_filter = data.get("category")
+
+        # Parse category filter if provided
+        cat_enum = None
+        if category_filter:
+            try:
+                cat_enum = PreferenceCategory(category_filter.lower())
+            except ValueError:
+                pass
+
+        prefs = self.preference_manager.list_preferences(category=cat_enum)
+        summary = self.preference_manager.format_summary()
+
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "preferences_response",
+                    "preferences": [p.to_dict() for p in prefs],
+                    "summary": summary,
+                }
+            )
+        )
+
+    async def _handle_clear_preference(self, data: Dict[str, Any], websocket) -> None:
+        """Handle clear_preference command - delete a specific preference.
+
+        Expected format: {"type": "clear_preference", "id": "..."}
+
+        Response format: {
+            "type": "preference_cleared",
+            "success": true/false,
+            "id": "..."
+        }
+        """
+        pref_id = data.get("id", "")
+
+        if not pref_id:
+            await websocket.send(
+                json.dumps({"type": "error", "message": "Preference ID is required"})
+            )
+            return
+
+        deleted = self.preference_manager.delete_preference(pref_id)
+
+        if deleted:
+            await self._broadcast_preference_update()
+
+        await websocket.send(
+            json.dumps(
+                {"type": "preference_cleared", "success": deleted, "id": pref_id}
+            )
+        )
+
+    def _on_preference_change(self) -> None:
+        """Handle preference state changes - triggers broadcast."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # No running loop, skip broadcast
+        loop.create_task(self._broadcast_preference_update())
+
+    async def _broadcast_preference_update(self) -> None:
+        """Broadcast preference update to all WebSocket clients."""
+        if self.websocket_clients:
+            prefs = self.preference_manager.list_preferences()
+            summary = self.preference_manager.format_summary()
+            message = json.dumps(
+                {
+                    "type": "preference_update",
+                    "preferences": [p.to_dict() for p in prefs],
+                    "summary": summary,
                 }
             )
             await asyncio.gather(
@@ -339,6 +533,12 @@ class MUDClient:
                         await websocket.send(
                             json.dumps({"type": "goal_deleted", "success": deleted})
                         )
+                    elif msg_type == "feedback":
+                        await self._handle_feedback(data, websocket)
+                    elif msg_type == "get_preferences":
+                        await self._handle_get_preferences(data, websocket)
+                    elif msg_type == "clear_preference":
+                        await self._handle_clear_preference(data, websocket)
 
                 except json.JSONDecodeError:
                     await self.send(message)
