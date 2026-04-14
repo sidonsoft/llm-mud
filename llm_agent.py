@@ -6,6 +6,7 @@ from typing import Dict, List, Any, Optional
 from llm_providers import LLMProvider, create_provider
 from context_manager import ContextManager, ActivityType, MemoryEntry
 from goal_manager import GoalManager
+from preference_manager import PreferenceManager, PreferenceCategory
 
 
 class LLMAgent:
@@ -18,6 +19,7 @@ class LLMAgent:
         working_memory_size: int = 20,
         config_path: str = "config.json",
         goal_manager: Optional[GoalManager] = None,
+        preference_manager: Optional[PreferenceManager] = None,
     ):
         self.ws_url = ws_url
         self.provider = provider or create_provider("random")
@@ -36,6 +38,8 @@ class LLMAgent:
 
         # Goal management - wire goal_manager to context_manager if provided
         self.goal_manager = goal_manager
+        # Preference learning
+        self.preference_manager = preference_manager
         # Context management
         self.context_manager = ContextManager(working_memory_size=working_memory_size)
         if self.goal_manager:
